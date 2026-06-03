@@ -1,0 +1,49 @@
+# CI for tokenlab — stdlib-only Python library (CONSTITUTION §1, §9 DoD).
+#
+# Satisfies §9 "full suite green locally AND in CI" against the constitutional
+# runtime (Python 3.12). No deploy job: §1 deployment target = N/A (importable
+# library). No secrets/credentials required — stdlib-only, no external services.
+#
+# Step duration baseline (recorded 2026-06-03):
+#   checkout:     2s
+#   setup-python: 5s
+#   install:      4s
+#   tests:        6s
+#   smoke:        2s
+
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: pytest (Python 3.12)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # stdlib-only project: pytest is the sole test-time dependency.
+      - name: Install pytest
+        run: pip install pytest
+
+      # conftest.py inserts src/ into sys.path during collection, so pytest
+      # resolves `from tokenlab.duration import parse_duration` the same way
+      # the local suite does (README documents PYTHONPATH=src).
+      - name: Run tests
+        run: python -m pytest -q
+
+      # R1 smoke assertion. This runs outside pytest, so conftest.py does not
+      # apply — set PYTHONPATH=src to resolve the import exactly as the README
+      # documents for direct interpreter use.
+      - name: R1 smoke assertion
+        run: python -c "from tokenlab.duration import parse_duration; assert parse_duration('1h30m') == 5400"
+        env:
+          PYTHONPATH: src

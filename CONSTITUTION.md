@@ -1,6 +1,4 @@
-# <project> — Constitution
-
-> **Template.** Run `/init-project <product-name>` in Claude Code from the repository root: it renames this file to `CONSTITUTION.md`, replaces every `<project>` placeholder with your product name, and removes the template. Then fill in §1 (Stack) and §6 (Performance budgets) before the first `/autopilot` run. The intake agent will refuse to lock a ticket while load-bearing sections remain `TBD`.
+# tokenlab — Constitution
 
 This document defines the **project-level invariants** that every agent must respect when producing specs, code, tests, docs, or reviews. The constitution is load-bearing: a spec, implementation, or PR that contradicts it is rejected, regardless of how well it satisfies the immediate task.
 
@@ -11,14 +9,13 @@ This document defines the **project-level invariants** that every agent must res
 
 ## 1. Stack & boundaries
 
-> **Fill these in before the first `/autopilot` run.** Until filled, `spec-architect` MUST emit an `URGENT: yes` CLARIFY rather than guessing.
-
-- **Language(s) & runtime:** _TBD_
-- **Framework(s):** _TBD_
-- **Datastore(s):** _TBD_
-- **External services we depend on:** _TBD_
-- **Deployment target:** _TBD_
-- **Supported clients / browsers / OSs:** _TBD_
+- **Language(s) & runtime:** Python 3.12, kun standardbiblioteket, ingen eksterne runtime-dependencies.
+- **Framework(s):** None (standard library only).
+- **Datastore(s):** None.
+- **External services we depend on:** None.
+- **Deployment target:** N/A — importable library module.
+- **Supported clients / browsers / OSs:** Any platform with CPython 3.12.
+- **Test:** pytest.
 
 ---
 
@@ -54,27 +51,27 @@ These are the rules that override convenience. Breaking one requires an explicit
 - **No mocks of code you own.** Mock external boundaries (HTTP, time, filesystem, third-party SDKs); use the real thing for internal modules.
 - **No mocks of the database in integration tests.** Use a real database (containerized or in-memory equivalent that matches the production engine's behavior).
 - **Flaky tests are bugs.** A skipped/quarantined test must have a dated issue link and a removal deadline.
-- **Coverage floor:** _TBD_ %. Coverage is a smoke alarm, not a goal — 100% coverage of trivial getters proves nothing.
+- **Coverage floor:** 0 % (tracked but not gated). Coverage is a smoke alarm, not a goal — 100% coverage of trivial getters proves nothing.
 
 ### 4.1 Test environment contract
 <!-- Filled in by /init-project -->
-- **Local isolation strategy:** _TBD_
-- **Services required for tests:** _TBD_
-- **Cloud dev policy:** _TBD_
+- **Local isolation strategy:** None needed — tests require no external infrastructure (in-memory / SQLite / pure functions)
+- **Services required for tests:** N/A
+- **Cloud dev policy:** No cloud — tests must never require live cloud credentials or call external APIs
 
-[scope: TBD]
+[scope: set]
 
 ### 4.2 TDD policy
 <!-- Filled in by /init-project -->
-- _TBD_
+- spec-derived-post-impl — test-engineer after developer, tests derived from spec (pipeline default)
 
-[scope: TBD]
+[scope: set]
 
 ### 4.3 E2E policy
 <!-- Filled in by /init-project -->
-- _TBD_
+- Disabled — unit and integration tests are sufficient; no E2E suite
 
-[scope: TBD]
+[scope: set]
 
 ---
 
@@ -109,15 +106,15 @@ Budgets are checked by `performance-analyst` on any change that touches a hot pa
 
 ### 7.1 Standard
 
-- **Conformance target: WCAG 2.2 Level `<wcag_level>`** (default: **AA**). No new component ships below this level. Projects with a public-service or accessibility-first mandate may raise this to AAA by amending this placeholder.
+- **Conformance target: WCAG 2.2 Level AA** (default: **AA**). No new component ships below this level. Projects with a public-service or accessibility-first mandate may raise this to AAA by amending this placeholder.
 - A failing automated check is a CI blocker, not a warning.
-- `<wcag_level>` is locked by `requirements-intake` during the first intake round and referenced by `spec-architect` for every UI feature.
+- The WCAG level is locked by `requirements-intake` during the first intake round and referenced by `spec-architect` for every UI feature.
 
 ### 7.2 Scope
 
 The following surfaces are in scope for accessibility conformance:
 
-- `<ui_surfaces>` — _TBD: replace with the list of UI surfaces this project exposes (e.g., "web app at `/`, admin dashboard at `/admin`, public marketing pages")._
+- N/A — this project exposes no UI surfaces (importable library module).
 
 All surfaces listed here are subject to §7.3 automated gating and §7.4 manual review. Surfaces added after initial bootstrap require a constitution amendment (§11) to be brought into scope.
 
@@ -376,16 +373,16 @@ Any pipeline run that adds ≥5 new backlog entries in one iteration MUST surfac
 
 ### 13.1 Versioning model
 
-- **Scheme:** _TBD_ — one of `semver` / `calver` / `none` / `custom`. Defines how releases are numbered and what each version-component means.
-- **Version field location:** _TBD_ — path to the canonical version field in the stack's primary manifest (e.g. `package.json:version`, `pyproject.toml:[project].version`, `Cargo.toml:[package].version`). Set to `N/A` if the scheme is `none`.
+- **Scheme:** none — one of `semver` / `calver` / `none` / `custom`. Defines how releases are numbered and what each version-component means.
+- **Version field location:** N/A — path to the canonical version field in the stack's primary manifest. Set to `N/A` if the scheme is `none`.
 
-[scope: TBD]
+[scope: set]
 
 ### 13.2 What each component means
 
 <!-- Filled in by /init-project from the chosen scheme. See the per-scheme reference below. -->
 
-_TBD_
+This project does not number releases. Deployments are tracked by git commit hash. `CHANGELOG.md` is not maintained. Re-enabling versioning requires a §11 amendment.
 
 ### 13.3 Changelog discipline
 
@@ -443,9 +440,9 @@ These hold regardless of the level in §14.2 or any personal override:
 
 ### 14.2 Autonomy level
 
-- **Level:** _TBD_ — one of `review-all` / `review-critical` / `autonomous`. Set by `/init-project`.
+- **Level:** autonomous — one of `review-all` / `review-critical` / `autonomous`. Set by `/init-project`.
 
-[scope: TBD]
+[scope: set]
 
 The default for new projects is `review-all` — identical to having no autonomy setting at all: nothing lands without a human `ok`. Raise it deliberately.
 
@@ -478,4 +475,4 @@ An individual contributor may set a personal autonomy preference that is **stric
 
 ## Revision log
 
-- **v0.1 (TBD)** — Initial copy from `CONSTITUTION.template.md`. Awaiting stack decisions in §1 and budgets in §6.
+- **v0.1 (2026-06-03)** — Initial copy from `CONSTITUTION.template.md` via `/init-project tokenlab`. §1 stack locked (Python 3.12, stdlib-only, pytest). §4 / §8 / §13 / §14 set to stdlib-library defaults. §6 performance budgets remain TBD (not latency-sensitive).

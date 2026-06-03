@@ -4,7 +4,7 @@ This repository runs a strict multi-agent pipeline. The orchestrating Claude (yo
 
 ## Repository layout (READ THIS FIRST — applies to every agent)
 
-**Product:** _template — run `/init-project <product-name>` to bootstrap._
+**Product:** `tokenlab`
 
 This repository IS the product. The scaffold's files (this `CLAUDE.md`, `.claude/`, `CONSTITUTION.template.md`, `docs/`) live at the repository root alongside the product's own files (`/src/`, `/tests/`, `/docs/specs/`, etc.). There is **no nested project directory**. Everything an agent produces lives at the repository root.
 
