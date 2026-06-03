@@ -1,95 +1,100 @@
-# agent-forge template
+# tokenlab
 
-You cloned the **agent-forge template**. This repo IS your product repo — the scaffold's files come with it, the product code grows alongside them, and everything lives in one git history.
+A small, dependency-free Python library of token- and string-parsing primitives.
+Pure standard library, Python 3.12+, no external runtime dependencies.
 
-> This file is the scaffold's welcome page. It points you at the canonical bootstrap instructions in [`CLAUDE.md`](CLAUDE.md). After you ship your first feature, the README you read here is replaced — `/init-project` writes a small stub, and `doc-writer` expands it into your product's own README as the project grows.
+The first primitive is `parse_duration`, which converts a compact human-readable
+duration string such as `"1h30m"` into a total count of whole seconds.
 
----
+## Install
 
-## What is this?
+tokenlab is a standard-library-only module. There is nothing to install beyond
+CPython 3.12 or newer. Make the `src/` directory importable (for example by
+running from the project root or adding `src/` to `PYTHONPATH`):
 
-A multi-agent scaffold for [Claude Code](https://claude.com/claude-code) that takes a software feature from raw idea to verified production deployment, with structured handoffs, convergence-loop reviews, and explicit gates at every stage.
-
-Roughly sixteen specialized agents (intake, spec architect, developer, test engineer, doc writer, QA reviewer, security auditor, performance analyst, database designer, DevOps engineer, code reviewer, UX consultant, dependency auditor, refactor specialist, release engineer, observability auditor) hand work to each other under written rules. A constitution file pins per-project invariants. A locked-down permission model keeps the agents contained to this repository.
-
-You write one paragraph describing a feature. The scaffold runs intake → spec → code → tests → docs → reviewers → release, with explicit gates and a convergence loop. You answer clarifying questions at one batched window up front, then watch the rest run.
-
----
-
-## Quick start
-
-The canonical, always-current bootstrap procedure lives in [`CLAUDE.md`](CLAUDE.md) under **"Bootstrapping this template"**. Read that section. The short version:
-
-1. Run `/init-project <product-name>`. The command handles the rename of `CONSTITUTION.template.md` to `CONSTITUTION.md`, cleans up forge-internal docs, writes a project stub `README.md` and a `CONTRIBUTING.md`, sets up `CLAUDE.project.md`, asks you about monitoring scope (audit / analytics / security) and test strategy (local isolation / cloud policy / E2E scope), and prints a final next-step checklist.
-2. Follow that checklist — at minimum fill `CONSTITUTION.md` §1 (Stack & boundaries) and create `.claude/settings.local.json` with narrow allow rules for your stack.
-3. Run `/autopilot <description of your first feature>`. Intake batches clarifying questions up front; the rest of the pipeline runs to completion unless an urgent escape fires.
-
-For details on every step — including the security rationale behind the permission model, the constitution's role, and how `/forge-update` keeps you in sync with upstream — see [`CLAUDE.md`](CLAUDE.md).
-
----
-
-## How the pipeline works (high level)
-
-```
-              ┌─────────────────────────────────────────────┐
-              │           Phase 1 — Intake                  │
-              │   requirements-intake (interviews user)     │
-              │   → /docs/requirements/<feature>.md         │
-              └─────────────────────┬───────────────────────┘
-                                    │
-              ┌─────────────────────▼───────────────────────┐
-              │           Phase 2 — Build                   │
-              │  spec-architect → developer → test-engineer │
-              │              → doc-writer                   │
-              │  (+ parallel: database-designer,            │
-              │   devops-engineer, dependency-auditor)      │
-              └─────────────────────┬───────────────────────┘
-                                    │
-              ┌─────────────────────▼───────────────────────┐
-              │   Phase 3 — Convergence loop (fixpoint)     │
-              │   parallel reviewers:                       │
-              │     qa-reviewer (always)                    │
-              │     code-reviewer (always)                  │
-              │     observability-auditor (always)          │
-              │     security-auditor (when applicable)      │
-              │     performance-analyst (when applicable)   │
-              │     ux-consultant (when applicable)         │
-              │   REJECTs route automatically until clean   │
-              │   (smart cap: 3 recurring signatures or     │
-              │    no-progress or 8 iterations → escalate)  │
-              └─────────────────────┬───────────────────────┘
-                                    │
-              ┌─────────────────────▼───────────────────────┐
-              │           Phase 4 — Release                 │
-              │  release-engineer runs five gates:          │
-              │   source-control hygiene → CI green →       │
-              │   deploy → smoke test → observability       │
-              └─────────────────────────────────────────────┘
+```bash
+export PYTHONPATH=src   # PowerShell: $env:PYTHONPATH = "src"
 ```
 
----
+```python
+from tokenlab.duration import parse_duration
+```
 
-## When NOT to use autopilot
+## Usage
 
-Autopilot is the right tool for new features and substantial changes. For everything else — typo fixes, comment edits, log-level tweaks, single-file bug fixes, refactors, audits — use **manual single-agent invocation**. Invoke `developer`, `code-reviewer`, `security-auditor`, `refactor-specialist`, etc. directly. The agents' own forbidden actions enforce the right discipline; the pipeline ceremony is unnecessary for one-shot work.
+### `parse_duration(s: str) -> int`
 
-For a bug that needs a regression test: invoke `developer` to fix, then `test-engineer` to add the regression test (the agent's rules require it to fail on pre-fix code), then optionally `qa-reviewer` to confirm.
+Converts a compact duration string to a total count of whole seconds. Returns a
+non-negative `int` equal to `hours * 3600 + minutes * 60 + seconds`. Raises
+`ValueError` for any input that does not match the grammar below.
 
----
+#### Grammar
 
-## Why a constitution?
+A valid input is **one or more `<integer><unit>` components** concatenated with
+no separators. The rules are:
 
-Every project has invariants that survive across features — stack decisions, non-negotiables, code style, test discipline, security posture, performance budgets, a11y baseline, observability rules, DoD. Without a written record, every spec re-derives these from scratch and they drift.
+- **Units are exactly `h` (hours), `m` (minutes), `s` (seconds)** — lowercase
+  only. No other suffix is accepted.
+- **Units must appear in strict descending order** — `h` before `m` before `s`.
+- **Each unit appears at most once.** Repeats are invalid.
+- **Each integer is a non-negative base-10 number** — no sign, no decimal point.
+  Leading zeros are accepted (`"01h"` is `3600`).
+- **No bare integers.** Every number needs a unit (`"90"` is invalid).
+- **No negatives** (`"-1h"` is invalid).
+- **Leading and trailing whitespace is trimmed**, but whitespace *between*
+  components is invalid (`"1h 30m"` is invalid).
+- **`"0s"` returns `0`.** There is no per-component cap and no clock-range
+  validation — `"90m"` is `5400`, not rejected.
 
-The constitution is upstream of everything: `Constitution > Spec > Implementation > Tests > Docs`. Agents reading the constitution alongside the spec catch a contradictory spec before they implement it.
+#### Examples
 
-Amendments go through a documented process (`CONSTITUTION.md` §11), not ad-hoc PR exceptions.
+```python
+from tokenlab.duration import parse_duration
 
----
+parse_duration("1h30m")      # 5400
+parse_duration("2h15m30s")   # 8130
+parse_duration("45s")        # 45
+parse_duration("0s")         # 0
+parse_duration("90m")        # 5400  (no clock-range cap)
+parse_duration("01h")        # 3600  (leading zeros allowed)
+parse_duration("  1h  ")     # 3600  (outer whitespace trimmed)
+```
 
-## See also
+Invalid input raises `ValueError`:
 
-- [`CLAUDE.md`](CLAUDE.md) — the router playbook. Canonical source of routing rules, pipeline order, autopilot mode, bootstrapping, and the path-resolution rules every agent obeys.
-- [`UPGRADING.md`](UPGRADING.md) — per-version migration guide. Drives `/forge-update`.
-- [`.claude/commands/autopilot.md`](.claude/commands/autopilot.md) — the autopilot orchestration algorithm (intake → build → convergence → release).
-- Each agent definition under [`.claude/agents/`](.claude/agents/) — full responsibilities, forbidden actions, output artifacts, and the structured-block protocol (CLARIFY / REJECT).
+```python
+parse_duration("")        # ValueError — empty
+parse_duration("90")      # ValueError — bare integer, no unit
+parse_duration("1H")      # ValueError — uppercase suffix
+parse_duration("1d")      # ValueError — unsupported unit
+parse_duration("-1h")     # ValueError — negative
+parse_duration("1.5h")    # ValueError — decimal component
+parse_duration("30m1h")   # ValueError — out of order
+parse_duration("1h1h")    # ValueError — repeated unit
+parse_duration("1h 30m")  # ValueError — whitespace between components
+parse_duration("PT1H30M") # ValueError — ISO-8601 not supported
+```
+
+The function is total over `str`: for any string it either returns a
+non-negative `int` or raises `ValueError`. It never raises another exception
+type for a malformed string, and it never returns a sentinel or silent default.
+
+## Run the tests
+
+```bash
+PYTHONPATH=src pytest        # PowerShell: $env:PYTHONPATH = "src"; pytest
+```
+
+## Troubleshooting
+
+- **`ModuleNotFoundError: No module named 'tokenlab'`** — `src/` is not on the
+  import path. Set `PYTHONPATH=src` (or run from the project root with that set).
+- **`ValueError: invalid duration string: ...`** — the input does not match the
+  grammar above. The most common causes are uppercase units (`"1H"`), bare
+  integers with no unit (`"90"`), out-of-order or repeated units (`"30m1h"`,
+  `"1h1h"`), and whitespace between components (`"1h 30m"`). The message echoes
+  the trimmed input so you can see exactly what was parsed.
+
+## Contributing
+
+For the development workflow, see [CONTRIBUTING.md](CONTRIBUTING.md).
