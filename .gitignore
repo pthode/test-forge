@@ -1,0 +1,54 @@
+# Per-machine Claude Code settings (allow-lists, local overrides).
+# Each developer maintains their own; see CLAUDE.md §"Bootstrapping this template".
+.claude/settings.local.json
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.vscode/
+.idea/
+
+# Stack-specific build artifacts — uncomment the lines that apply.
+# These are commented out because the scaffold is stack-agnostic; the
+# active project's `/init-project` bootstrap does not know your stack.
+# Uncomment the relevant lines after you fill in CONSTITUTION.md §1.
+
+# Node / TypeScript:
+# node_modules/
+# dist/
+# build/
+# .next/
+# coverage/
+# *.tsbuildinfo
+
+# Python:
+# __pycache__/
+# *.py[cod]
+# *.egg-info/
+# .pytest_cache/
+# .ruff_cache/
+# .mypy_cache/
+# .venv/
+# venv/
+
+# Go:
+# /bin/
+# vendor/
+
+# Rust:
+# target/
+
+# Ruby:
+# .bundle/
+# vendor/bundle/
+
+# Java / JVM:
+# target/
+# build/
+# .gradle/
+
+# Generic:
+# *.log
+# .env.local

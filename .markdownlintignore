@@ -1,0 +1,18 @@
+# Agent definitions, commands, templates, memory — machine-consumed, not human-facing
+.claude/
+
+# Pipeline-generated artifacts — written by agents, not intended for lint review
+docs/requirements/
+docs/specs/
+docs/api/
+docs/data-models/
+docs/diagrams/
+docs/qa-reports/
+docs/security-reports/
+docs/perf-reports/
+docs/code-reviews/
+docs/ux-reviews/
+docs/dependency-reports/
+docs/refactor-logs/
+docs/release-reports/
+docs/observability-reports/
