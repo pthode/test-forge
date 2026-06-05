@@ -56,6 +56,51 @@ Tech debt, deferred fixes, and known cleanup items. Reviewers append entries dur
 - **Suggested fix:** `src/tokenlab/duration.py:60` — the O(n²) cost of `int(value)` on a very large component is bounded only by CPython's global `int_max_str_digits` guard (default 4300), which raises a spec-compatible `ValueError` (R8). If a caller raises that global limit the cost ceiling disappears. Add a brief docstring/comment noting the dependency, or an explicit component-length check. No behavior change required now; measured worst case under the default guard is sub-millisecond. (Related to B-004 — candidate for grooming consolidation.)
 - **Deadline:** 2026-09-01
 
+## B-006 — Bump GitHub Actions versions before Node 20 EOL (2026-06-16)
+
+- **Created:** 2026-06-03
+- **Source:** release-engineer finding during feature `parse-duration` iteration 1 (CI deprecation annotation)
+- **Type:** tech-debt
+- **Severity:** minor (singleton)
+- **Suggested fix:** `.github/workflows/ci.yml` — `actions/checkout@v4` and `actions/setup-python@v5` run on Node 20, which GitHub forces to Node 24 on 2026-06-16. Bump to the Node-24-compatible major versions (owned by devops-engineer) before that date. Non-blocking today.
+- **Deadline:** 2026-06-16
+
+## B-007 — LruCache: no explicit int type guard on capacity
+
+- **Created:** 2026-06-05
+- **Source:** qa-reviewer finding during feature `lru-cache` iteration 1
+- **Type:** tech-debt
+- **Severity:** minor (singleton)
+- **Suggested fix:** `src/tokenlab/cache.py:36` — `if capacity < 1` accepts `float` (`LruCache(1.5)` → capacity `1.5`) and `bool` (`LruCache(True)` → capacity `1`). Within spec (§7/OQ-2 only requires non-comparable types not be silently accepted; an `isinstance` check is not mandated), but a `float`/`bool` capacity is a latent surprise. Add an optional `isinstance(capacity, int) and not isinstance(capacity, bool)` guard, or a test pinning the current float-accepting behavior.
+- **Deadline:** 2026-09-01
+
+## B-008 — LruCache class name diverges from §3 acronym-casing
+
+- **Created:** 2026-06-05
+- **Source:** code-reviewer finding during feature `lru-cache` iteration 1
+- **Type:** docs/convention
+- **Severity:** minor (singleton)
+- **Suggested fix:** `src/tokenlab/cache.py:9` — CONSTITUTION §3 keeps ≤3-letter acronyms uppercase (`LRUCache`), but the name `LruCache` is fixed by the spec (R1/§4/§5), so the developer correctly followed it. Reconciliation is spec-architect's: either amend the spec to `LRUCache`, or document a deliberate §3 exception for the spec-mandated name. Not a developer defect.
+- **Deadline:** 2026-09-01
+
+## B-009 — LruCache: get() hit path does two hash lookups
+
+- **Created:** 2026-06-05
+- **Source:** code-reviewer finding during feature `lru-cache` iteration 1
+- **Type:** refactor
+- **Severity:** minor (singleton)
+- **Suggested fix:** `src/tokenlab/cache.py:52-55` — the hit path does `__contains__` then `__getitem__` (two probes). Optional single-lookup sentinel refactor (`value = self._store.get(key, _MISSING)`). Readability tradeoff; amortized O(1) either way, so R16 is unaffected. Low priority.
+- **Deadline:** 2026-09-01
+
+## B-010 — LruCache: docstring should note capacity bounds entry count, not bytes
+
+- **Created:** 2026-06-05
+- **Source:** security-auditor finding (F1, LOW) during feature `lru-cache` iteration 1
+- **Type:** docs
+- **Severity:** minor (singleton)
+- **Suggested fix:** `src/tokenlab/cache.py:10-28` — class docstring does not state that `capacity` bounds entry *count*, not memory bytes. Add one sentence noting that callers storing untrusted/unbounded values should bound value size themselves. Doc-hardening only; no exploit, no code change.
+- **Deadline:** 2026-09-01
+
 <!-- Reviewers append entries here. Format per CONSTITUTION.md §12.2. -->
 
 ## Closed entries (audit trail — one release cycle)
