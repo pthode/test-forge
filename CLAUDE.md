@@ -306,6 +306,24 @@ REQUIRED ACTION:
 
 **Autonomy levels (CONSTITUTION §14):** the behavior above is the `review-all` default. A project (or your personal override) may raise the autonomy level — see "Workflow autonomy" above. At `review-critical` you may commit and push routine work without asking, pausing only on critical changes; at `autonomous` you may carry a change through `commit → push → PR → merge` within the §14.1 floor. Even then, group related changes into meaningful commits — "autonomous" is not "commit after every file edit". Compute the effective level before acting.
 
+## Tool discipline (all agents)
+
+Every agent has the dedicated file tools — `Read`, `Glob`, `Grep`, and (where granted) `Write`/`Edit`. These do **not** prompt the user. `Bash` is permission-gated because it can run arbitrary code, so every `Bash` call risks an interrupting prompt and is slower (it spawns a shell). Reaching for `Bash` to do something a dedicated tool already does is the single most common source of needless permission prompts: it stalls the pipeline waiting on a human and erodes the "it just runs" experience.
+
+**The rule, for the orchestrator and every subagent:**
+
+| To… | Use | Never (via `Bash`) |
+| --- | --- | --- |
+| read a file | `Read` | `cat`, `head`, `tail`, `type` |
+| find files by name | `Glob` | `ls`, `dir`, `find` |
+| search file contents | `Grep` | `grep`, `rg`, `findstr` |
+| create / overwrite a file | `Write` (creates parent dirs itself) | `echo >`, `mkdir` + redirection |
+| edit an existing file | `Edit` / `MultiEdit` | `sed`, `awk` |
+
+**Reserve `Bash` for what only a shell can do:** running the project's test / build / type-check / lint toolchain, `git`, package managers, and other commands that actually execute work — that is the legitimate use the permission model is tuned for. Deleting a file is also a legitimate `Bash` use (no dedicated delete tool exists).
+
+This is not a security rule (the security-sensitive gate below is separate) — it is about not making a human approve a directory listing. When unsure, prefer the dedicated tool.
+
 ## Security-sensitive changes (mandatory gate)
 
 The following kinds of change are **security-sensitive** and MUST be drafted, then routed through `security-auditor` for review BEFORE you write them to disk:
