@@ -1,6 +1,6 @@
 {
   "feature": "lru-cache",
-  "started_at": "2026-06-08",
+  "started_at": "2026-06-08T00:00:00Z",
   "status": "phase4_running",
   "iteration": 0,
   "signatures": {}
