@@ -91,95 +91,74 @@ hit and any `put` mark the touched entry most-recently-used, and the entry left
 untouched the longest is the one evicted. `None` is a storable value, distinct
 from an absent key.
 
-```python
-from tokenlab.cache import LruCache
+Constructor:
 
-cache = LruCache(capacity=2)
+```python
+from tokenlab.cache import LruCache, CacheStats
+
+cache = LruCache(capacity=2)  # capacity: positive int
 ```
 
 Constructing with a `capacity` below `1` raises `ValueError`:
 
 ```python
-LruCache(0)    # ValueError
-LruCache(-1)   # ValueError
+LruCache(0)    # ValueError: capacity must be a positive integer
+LruCache(-1)   # ValueError: capacity must be a positive integer
 ```
 
-#### `LruCache` public surface
+#### Public API
 
-| Member | Returns | Effect on recency | Effect on counters |
-| --- | --- | --- | --- |
-| `get(key, default=None)` | stored value on a hit, else `default` | hit refreshes to most-recently-used | hit `+1` `hits`; miss `+1` `misses` |
-| `put(key, value)` | `None` | inserts/overwrites as most-recently-used | new key at capacity `+1` `evictions` |
-| `peek(key, default=None)` | stored value if present, else `default` | none | none |
-| `remove(key)` | `True` if it was present, else `False` | n/a | none |
-| `clear()` | `None` | drops all entries | counters left unchanged |
-| `reset_stats()` | `None` | entries left intact | zeroes `hits`/`misses`/`evictions` |
-| `key in cache` (`__contains__`) | `bool` | none | none |
-| `len(cache)` (`__len__`) | current entry count | none | none |
+**`get(key: Any, default: Any = None) -> Any`**
 
-Five read-only `int` properties expose lifetime statistics. Assigning to any of
-them raises `AttributeError`:
+Returns the stored value for `key` if present and increments `hits`; promotes the key to most-recently-used. Returns `default` (or `None` if not supplied) and increments `misses` if the key is absent; does not insert or reorder entries.
 
-| Property | Meaning |
-| --- | --- |
-| `hits` | cumulative `get` hits since construction or the last `reset_stats` |
-| `misses` | cumulative `get` misses since construction or the last `reset_stats` |
-| `evictions` | cumulative evictions since construction or the last `reset_stats` |
-| `size` | current number of cached entries (also `len(cache)`) |
-| `capacity` | maximum entries before a new insert evicts; never changes after construction |
+**`put(key: Any, value: Any) -> None`**
 
-#### `LruCache` semantics
+Inserts a new key/value pair or updates an existing key, promoting it to most-recently-used in both cases. If inserting a new key causes the cache to exceed `capacity`, the least-recently-used entry is evicted and `evictions` increments by 1. Updating an existing key does not evict and does not increment `evictions`.
 
-- **Hit vs. miss.** `get` on a present key returns its value (which may itself be
-  `None`) and counts a hit; `get` on an absent key returns `default` (`None` when
-  omitted), counts a miss, and does **not** insert the key.
-- **`put` on an existing key** overwrites the value and refreshes recency without
-  growing `size`.
-- **Eviction** happens only when inserting a *new* key while `size == capacity`;
-  it removes the genuinely least-recently-used entry, increments `evictions`, and
-  keeps `size == capacity`. Filling exactly to capacity evicts nothing.
-- **`peek` and `in` are inspection-only.** Neither refreshes recency nor touches
-  the hit/miss counters, so they never protect an entry from eviction.
-- **`clear` and `reset_stats` are orthogonal.** `clear` drops entries but keeps
-  the lifetime counters; `reset_stats` zeroes the counters but keeps the entries.
-  Call both to reset everything.
-- **`remove` is forgiving.** Removing an absent key is a no-op that returns
-  `False` and never raises.
-- **Keys must be hashable.** Passing an unhashable key (e.g. a `list` or `set`)
-  to any key-accepting method surfaces the underlying mapping's natural
-  `TypeError`, unwrapped — no custom validation is layered on top.
-- **Not thread-safe.** `LruCache` acquires no internal lock. A caller sharing one
-  instance across threads must serialize access itself.
+**`stats` property**
 
-#### `LruCache` examples
+Returns a fresh frozen dataclass snapshot `CacheStats(hits: int, misses: int, evictions: int, size: int)` on each access:
+
+- `hits` — count of successful `get` calls (non-negative, monotonic)
+- `misses` — count of unsuccessful `get` calls (non-negative, monotonic)
+- `evictions` — count of automatic evictions due to capacity overflow (non-negative, monotonic)
+- `size` — current number of entries in the cache (0 ≤ size ≤ capacity)
+
+All counters start at 0 and only increase; there is no method to reset them.
+
+#### Semantics and examples
 
 ```python
 from tokenlab.cache import LruCache
 
-cache = LruCache(2)
+cache = LruCache(capacity=2)
 cache.put("a", 1)
 cache.put("b", 2)
-cache.get("a")            # 1 — hit; "a" is now most-recently-used
+cache.get("a")            # 1 — hit; "a" promoted to most-recently-used
 cache.put("c", 3)         # at capacity: evicts "b" (least recently used)
-"b" in cache              # False — evicted
-"a" in cache              # True  — protected by the earlier get
-cache.evictions           # 1
+cache.get("b")            # None — miss; "b" was evicted
+cache.stats               # CacheStats(hits=1, misses=1, evictions=1, size=2)
 
-# None is a stored value, distinct from an absent key:
-cache.put("k", None)
-cache.get("k")            # None — but this is a HIT (cache.hits increments)
-cache.get("absent")      # None — this is a MISS (cache.misses increments)
+# None is a storable value, distinct from an absent key:
+cache.put("null_key", None)
+cache.get("null_key")     # None — HIT (cache.stats.hits increments)
+cache.get("absent")       # None — MISS (cache.stats.misses increments)
 
-# Inspection without side effects:
-cache.peek("k")           # None — does not count, does not refresh recency
-len(cache)                # current entry count
-
-# Mutation:
-cache.remove("k")         # True  — was present and removed
-cache.remove("gone")      # False — absent, no-op, no exception
-cache.clear()             # drops all entries; counters retained
-cache.reset_stats()       # zeroes hits/misses/evictions; entries retained
+# Updating an existing key does not evict:
+cache = LruCache(capacity=2)
+cache.put("x", 10)
+cache.put("y", 20)
+cache.put("x", 100)       # update x; size stays 2, no eviction
+cache.stats               # CacheStats(hits=0, misses=0, evictions=0, size=2)
 ```
+
+#### Constraints
+
+- **Keys must be hashable.** Passing an unhashable key (e.g. `list`, `dict`, `set`)
+  to `get()` or `put()` raises `TypeError` from the underlying mapping, unwrapped.
+- **Single-threaded only.** `LruCache` does not acquire internal locks. Concurrent
+  access from multiple threads will corrupt state; the caller must serialize if needed.
 
 ## Run the tests
 
@@ -196,19 +175,15 @@ PYTHONPATH=src pytest        # PowerShell: $env:PYTHONPATH = "src"; pytest
   integers with no unit (`"90"`), out-of-order or repeated units (`"30m1h"`,
   `"1h1h"`), and whitespace between components (`"1h 30m"`). The message echoes
   the trimmed input so you can see exactly what was parsed.
-- **`ValueError: capacity must be >= 1`** — `LruCache` was constructed with a
-  capacity of `0` or a negative number. Pass an integer of at least `1`.
+- **`ValueError: capacity must be a positive integer`** — `LruCache` was constructed with a
+  capacity of `0` or a negative number. Pass a positive integer.
 - **`TypeError: unhashable type: ...`** — a `list`, `dict`, `set`, or other
   unhashable object was passed as a cache key. Keys must be hashable; this is the
   underlying mapping's own error, surfaced unwrapped.
-- **`AttributeError` when assigning to `cache.hits` (or another stat)** — the five
-  statistics fields (`hits`, `misses`, `evictions`, `size`, `capacity`) are
-  read-only. Use `reset_stats()` to zero the counters; the cache manages `size`
-  and `capacity` itself.
-- **An entry you expected to survive was evicted** — recency is true-LRU, and only
-  `get`, `put`, and overwriting a key refresh recency. `peek` and `key in cache`
-  are inspection-only and do **not** protect an entry. Inspect `cache.evictions`
-  to confirm an eviction occurred.
+- **An entry you expected to survive was evicted** — recency is true-LRU. Only
+  `get` (on a hit) and `put` mark an entry as most-recently-used. On overflow,
+  the true least-recently-used entry (not accessed in the longest time) is evicted.
+  Check `cache.stats.evictions` to confirm an eviction occurred.
 
 ## Contributing
 

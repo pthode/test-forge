@@ -1,0 +1,23 @@
+{
+  "forge_version": "1.13.0",
+  "session": "4c7291db-d51b-459d-be22-27275d849e79",
+  "wall_clock_seconds": 1736,
+  "qa_reviewer_rounds": 1,
+  "release_engineer_runs": 2,
+  "subagents_total": 13,
+  "invocations_per_type": {
+    "observability-auditor": 1,
+    "test-engineer": 1,
+    "developer": 1,
+    "security-auditor": 1,
+    "release-engineer": 2,
+    "performance-analyst": 1,
+    "qa-reviewer": 1,
+    "doc-writer": 1,
+    "code-reviewer": 1,
+    "requirements-intake": 2,
+    "spec-architect": 1
+  },
+  "cost_weighted_input_equiv": 5472012,
+  "output_tokens": 188363
+}

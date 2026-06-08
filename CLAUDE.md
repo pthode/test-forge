@@ -61,19 +61,29 @@ This scaffold is distributed as a template repo. When you clone it (via GitHub's
    This separation matters for upgrades: `/forge-update` can overwrite `CLAUDE.md` with a
    newer version of the forge pipeline rules without losing your project-specific additions.
 
-5. **Add forge-owned path deny rules to `.claude/settings.json`** (recommended).
-   To prevent agents from accidentally modifying scaffold files during pipeline runs, add
-   these to the `deny` array in your project's `.claude/settings.json`:
+5. **Add forge-owned path deny rules to `.claude/settings.json`** (required — `/init-project` prints this block at the end of bootstrap so you don't miss it).
+   Once you are building a product, a pipeline run has no reason to hand-edit the agent, command, or
+   template files — and an injected agent must not be able to. Add these to the `deny` array in your
+   project's `.claude/settings.json`:
 
    ```json
    "Edit(.claude/agents/*)",
    "Write(.claude/agents/*)",
    "Edit(.claude/commands/*)",
-   "Write(.claude/commands/*)"
+   "Write(.claude/commands/*)",
+   "Edit(.claude/templates/*)",
+   "Write(.claude/templates/*)"
    ```
 
-   Note: these rules apply to the project you're building, not to agent-forge itself.
-   If you are working on agent-forge, skip this step.
+   You add these **by hand** — `/init-project` cannot, because the permission model's load-bearing
+   invariant is that only a human writes `.claude/settings.json` (it is deny-protected against agents
+   and against init itself). Auto-writing it would punch a hole in exactly the rule that stops an
+   injected agent from rewriting its own permission model. `/forge-update` still upgrades these files
+   afterwards: it uses `git checkout`, not the Edit/Write tools, so the deny blocks hand-edits during
+   runs without blocking scaffold upgrades.
+
+   Note: these rules apply to the project you're building, not to agent-forge itself. If you are
+   working on agent-forge, skip this step — the template needs its scaffold files editable.
 
 6. **Run `/autopilot <description of the first feature>`.**
 
@@ -373,6 +383,17 @@ How much of the `commit → push → PR → merge` path you drive on your own �
 | `autonomous` | Drive `commit → push → PR → merge` within the floor without asking; surface only `URGENT` and the floor-mandated security-sensitive confirmation. |
 
 This never overrides the floor: protected branches stay PR-only, the permission model is never loosened, CI must be green before merge, and security-sensitive changes always get explicit human confirmation — at every level.
+
+## Decision-surfacing discipline
+
+Two kinds of decision, handled differently:
+
+- **Requirements / product understanding** — what to build, who it is for, how it should behave when the spec is silent. The user's knowledge is irreplaceable here. **Keep asking**, batched upfront (`requirements-intake` in autopilot; one clarifying round in manual mode). This discipline is unchanged.
+- **Technical method** — _how_ to build it within the locked stack: data structure, error-handling pattern, module/file layout, algorithm, internal API shape, naming. The recommendation is reliable and the user almost always follows it. **Decide it autonomously** with the best-practice default and a one-line rationale; do NOT present an option-menu.
+
+The exception that overrides "decide autonomously": surface a decision to the user **only** when it is **user-impacting, irreversible, or a product / business / legal call** — i.e. it meets the `URGENT: yes` criteria. A choice that changes what the end user sees or does, that cannot be cheaply undone, or that is not yours to make, still gets asked. **Adding a dependency or changing the stack is never "technical method"** — it is a §14.4 critical change and is surfaced, not decided silently (this is also `spec-architect`'s standing forbidden action).
+
+**Then disclose.** Every autopilot final report and every non-trivial manual-mode summary ends with a **"Decisions taken & assumptions"** list: the autonomous technical choices made (a, b, c…), one line each, closing with "anything you'd change?". Keep it short and near the top of the wrap-up — a buried or bloated list defeats the purpose. Genuinely consequential decisions never appear here; they were asked upfront. This list is for the reversible technical calls the user would otherwise never see.
 
 ## Autopilot mode
 

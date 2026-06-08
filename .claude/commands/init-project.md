@@ -35,7 +35,7 @@ If no argument is given, ask the user "What is the product name? (kebab-case)" o
 5. **Remove `CONSTITUTION.template.md`.**
    - Delete the template file. It is no longer needed; the filled-in `CONSTITUTION.md` is the canonical record. If the user ever needs to re-bootstrap, they can recover the template from git history.
 
-6. **Clean up forge-internal documentation.**
+6. **Clean up forge-internal documentation and memory.**
 
    Delete the following files from `docs/` — they are agent-forge documentation, irrelevant for the product project:
 
@@ -52,6 +52,18 @@ If no argument is given, ask the user "What is the product name? (kebab-case)" o
    **Do NOT delete `docs/migrations/`** — that directory holds upgrade guides referenced by `UPGRADING.md` and used by `/forge-update`. It must remain.
 
    If any file in the delete list does not exist, skip it silently — the cleanup is idempotent.
+
+   **Reset `.claude/memory/`.** The repo's `.claude/memory/` is the *product's* home for `project` and `reference` memories (per `CLAUDE.md`'s memory-system override). A fresh template clone carries only the forge's own memories — notes about developing the scaffold — which are meaningless to the product and must not leak into it. This is the same hazard `BACKLOG.md` and `CLAUDE.project.md` guard against, so it follows the same fresh-clone/re-run policy:
+
+   - **Fresh template clone** (Step 2 found `_template`): delete every file under `.claude/memory/` *except* `MEMORY.md`, then overwrite `MEMORY.md` with a header-only stub:
+
+     ```markdown
+     # Memory Index
+     ```
+
+   - **Confirmed re-run** of an already-bootstrapped project (Step 2 / Step 3 got an explicit `yes`): do **NOT** touch `.claude/memory/`. It holds accumulated project memories that must survive a re-init — wiping them is data loss.
+
+   If `.claude/memory/` does not exist, skip silently — the reset is idempotent.
 
 7. **Replace `README.md` with a project stub.**
 
@@ -370,9 +382,17 @@ how you got here, and the right behavior differs:
          in-memory substitutes, fill in "Services required for tests" with specifics,
          e.g. "Postgres: docker-compose; Redis: in-memory".
       4. If the project is latency-sensitive, fill §6 (Performance budgets).
-      5. Create .claude/settings.local.json with stack-specific narrow allows
+      5. Lock the scaffold (REQUIRED, security). Add this deny block to
+         .claude/settings.json BY HAND — I cannot write settings.json; only a
+         human writes the permission model:
+             "Edit(.claude/agents/*)",    "Write(.claude/agents/*)",
+             "Edit(.claude/commands/*)",  "Write(.claude/commands/*)",
+             "Edit(.claude/templates/*)", "Write(.claude/templates/*)"
+         This stops a pipeline run from hand-editing scaffold files. /forge-update
+         still works — it uses git checkout, not the Edit/Write tools.
+      6. Create .claude/settings.local.json with stack-specific narrow allows
          (see CLAUDE.md §"Bootstrapping this template" for the snippet).
-      6. Run /autopilot <a description of the first feature>.
+      7. Run /autopilot <a description of the first feature>.
 
     The intake agent will refuse to lock a ticket while §1 stays TBD —
     that's intentional. Fill it in now.
@@ -384,7 +404,7 @@ You MUST NOT:
 
 - Pre-fill any field in `CONSTITUTION.md` §1 with a guess. The whole point of the TBD enforcement is that humans pick the stack.
 - Touch `.claude/agents/` or `.claude/commands/` — those are scaffold-level, not project-level.
-- Touch `.claude/settings.json` — that file is protected by deny rules and is the user's responsibility.
+- Touch `.claude/settings.json` — that file is protected by deny rules and is the user's responsibility. (Step 18 *prints* the required scaffold-lock deny block for the user to paste; init never writes the file itself — only a human writes the permission model.)
 - Initialize, modify, or commit any git state. The user owns the git workflow; the repo they cloned already has a git history.
 - Delete `docs/migrations/` or any file under it — those are upgrade guides referenced by `UPGRADING.md` and used by `/forge-update`.
 - Create any directory tree (`src/`, `tests/`, `docs/specs/`, etc.). Those are created by the agents on demand during pipeline runs.

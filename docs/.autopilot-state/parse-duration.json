@@ -1,0 +1,9 @@
+{
+  "feature": "parse-duration",
+  "started_at": "2026-06-03T00:00:00Z",
+  "status": "released",
+  "iteration": 1,
+  "signatures": {
+    "ci-absent-gate2": { "first_seen": 1, "last_seen": 1, "from": "release-engineer", "to": "devops-engineer", "severity": "blocker", "summary": "No .github/workflows/ CI; DoD requires green-in-CI. Resolved by ci.yml on 3.12; CI observed green; PR #1 squash-merged 164e031." }
+  }
+}

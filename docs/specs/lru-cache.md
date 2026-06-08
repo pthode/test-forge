@@ -1,312 +1,155 @@
 # lru-cache — Software Design Document
 
-> Source ticket: `/docs/requirements/lru-cache.md` (locked 2026-06-05).
-> Constitution: `/CONSTITUTION.md` (§1 Python 3.12 stdlib-only, pytest; §3 code style; §5 security; §6 perf budgets TBD/non-latency-sensitive; §8a always-on; §8b/c/d disabled; §13 versioning = none) + `/CONSTITUTION.project.md` (no §P sections defined).
+> Source ticket: `/docs/requirements/lru-cache.md` (locked 2026-06-08).
+> Constitution refs: §1 stack (Python 3.12, stdlib-only, pytest), §2 non-negotiables, §3 style, §5 security, §6 perf (budgets TBD), §8a observability (always-on). No `§P` project sections defined.
 
 ## 1. Context
 
-`tokenlab` needs a small, dependency-free caching primitive for reuse across the library. This
-feature adds a single self-contained class `LruCache` at `src/tokenlab/cache.py` that stores
-key→value pairs up to a fixed positive integer `capacity` and evicts the genuinely
-least-recently-used entry when inserting a new key would exceed capacity. It augments the
-existing stdlib-only utility set (alongside `parse_duration`); it does not replace any existing
-component.
+`tokenlab` has no caching primitive. This feature adds a bounded, in-memory, single-threaded LRU (least-recently-used) cache class, `LruCache`, so callers can memoize expensive computations (e.g. token measurements) without pulling in external dependencies. The implementation stays within the Python 3.12 standard library per CONSTITUTION §1 (zero runtime dependencies).
 
-The cache provides `get`/`put`, a full mutation API (non-recency-affecting membership check,
-`remove`, `clear`), and readable hit/miss/eviction/size/capacity statistics with a counter-reset
-operation. Recency is **true-LRU**: both a `get` hit and any `put` mark an entry
-most-recently-used, and eviction always removes the entry untouched longest.
+The cache has a fixed entry-count capacity set at construction. When inserting a new key would exceed capacity, the least-recently-used entry is evicted (counted, never silently dropped — CONSTITUTION §2.3). The class exposes hit/miss/eviction/size statistics via a read-only `stats` property.
 
-**What it explicitly does NOT do** (see §3 for the enumerated list): no persistence, no external
-dependencies, no TTL / time-based expiry, no size/weight-based eviction, no async API, no
-custom serialization, and no CLI / HTTP / UI surface.
-
-This document covers the full feature. **No `/docs/api/`, `/docs/data-models/`, or
-`/docs/diagrams/` artifacts are produced**, because:
-- there is no HTTP/network interface → no OpenAPI contract (§5),
-- there is no *persisted* state → no data model; the in-memory entry/counter layout is described
-  inline in §6 (ticket §8: purely in-memory for the instance lifetime),
-- there is a single in-process collaborator (the calling code) → no sequence diagram (the
-  multi-component threshold of >2 collaborators is not met).
+**This feature explicitly does NOT** provide thread-safety, TTL/expiry, async interfaces, byte-size limiting, persistence, typed generics, stats reset, or any public surface beyond `get`, `put`, and `stats`. See §3.
 
 ## 2. Requirements
 
-Each requirement is testable and cited back to the ticket. Decisions intake explicitly deferred
-to spec-architect are pinned in §4.1 and cross-referenced from the relevant requirement.
+<!-- Sources map each Rn back to the ticket item it derives from. -->
 
-- R1: A public class `LruCache` exists at `src/tokenlab/cache.py` and is the module's only public name. <!-- Sources: ticket §1, §3, §12 (file location), §14 Decisions (single public surface, inferred) -->
-- R2: `LruCache(capacity)` constructs successfully for any `int` `capacity >= 1`. A `capacity` of `0` or negative raises `ValueError`. <!-- Sources: ticket §6 A1/A4, §10, §12, §13 Q4 -->
-- R3: `get(key, default=None)` on a present key (a hit) returns the stored value, increments the `hits` counter by one, and refreshes the entry to most-recently-used. <!-- Sources: ticket §3, §7, §12, §13 Q1/Q3 -->
-- R4: `get(key, default=None)` on an absent key (a miss) returns the supplied `default` (`None` when omitted), increments the `misses` counter by one, raises no exception, and does not insert the key. <!-- Sources: ticket §3, §7, §12, §13 Q1 -->
-- R5: `put(key, value)` on a new key inserts it as most-recently-used and increases `size` by one (until `capacity` is reached). <!-- Sources: ticket §3, §12, §13 Q2 -->
-- R6: `put(key, value)` on an existing key overwrites the value, marks the entry most-recently-used, and leaves `size` unchanged (an overwrite never grows the cache). <!-- Sources: ticket §3, §12, §13 Q2 -->
-- R7: Inserting a *new* key while `size == capacity` first evicts the genuinely least-recently-used entry, increments the `evictions` counter by one, then inserts the new key, keeping `size == capacity`. <!-- Sources: ticket §3, §12 -->
-- R8: Recency is true-LRU. A `get` hit (R3) and any `put` (R5, R6) both mark the touched entry most-recently-used; the eviction victim (R7) is always the entry not touched for the longest time. <!-- Sources: ticket §3, §12, §13 Q3 -->
-- R9: `None` is a storable value distinct from absence. `put(k, None)` stores `None`; a later `get(k)` is a hit (increments `hits`) returning `None`, distinguishable from `get` on an absent key (which returns `default` and increments `misses`). <!-- Sources: ticket §3, §6, §7, §12, §13 Q5 -->
-- R10: All five statistics fields — `hits`, `misses`, `evictions`, current `size`, and `capacity` — are readable and accurate after any sequence of operations. The accessor shape is pinned in §4.1 D6. <!-- Sources: ticket §3, §7, §12, §13 Q6, §14 Decisions (stats accessor shape) -->
-- R11: `reset_stats()` zeroes the `hits`, `misses`, and `evictions` counters WITHOUT clearing cached entries; `size` and `capacity` are unaffected, and subsequent operations resume counting from zero. The name `reset_stats` is pinned in §4.1 D7. <!-- Sources: ticket §3, §7, §12, §13 Q6, §14 Decisions (reset_stats naming) -->
-- R12: A membership check via `__contains__` (`key in cache`) reports presence correctly as a boolean, does NOT change recency order, and does NOT alter `hits` or `misses`. A `peek(key)` accessor with the same non-recency-affecting, non-counting semantics is also provided per §4.1 D6/D8. <!-- Sources: ticket §3, §7, §12, §13 Q7, §14 Decisions (membership/peek shape) -->
-- R13: `remove(key)` removes a present entry, reducing `size` by one; a subsequent `get` on that key is a miss. Behavior on an absent key is pinned in §4.1 D4. <!-- Sources: ticket §3, §10, §12, §14 Decisions (remove-on-absent) -->
-- R14: `clear()` empties all cached entries (`size == 0`); `capacity` is unchanged. The effect of `clear()` on the statistics counters is pinned in §4.1 D9. <!-- Sources: ticket §3, §12, §14 Decisions (clear-stats behavior) -->
-- R15: Keys must be hashable. Passing an unhashable key (to any key-accepting method) surfaces the natural `TypeError` from the underlying mapping; no custom validation is layered on top and no other exception type is substituted. <!-- Sources: ticket §6, §10, §14 (unhashable-key default, inferred); CONSTITUTION §3 (raise at origin) -->
-- R16: `LruCache` provides amortized O(1) `get`, `put`, `remove`, `__contains__`, and `peek` — no operation is accidentally O(n) in cache size. The data structure achieving this is pinned in §4.1 D2. <!-- Sources: ticket §11 (structural perf check); CONSTITUTION §6 (budgets TBD, structural-only check) -->
-- R17: `LruCache` is documented as **not thread-safe**; no internal locking is provided. Concurrent mutation from multiple threads is the caller's responsibility. Pinned in §4.1 D1. <!-- Sources: ticket §14 Decisions (thread-safety model: default not thread-safe) -->
-- R18: The class and its public methods carry docstrings describing purpose, parameters, return values, recency semantics, the `ValueError` capacity contract, and the not-thread-safe note. <!-- Sources: ticket §3, §12; CONSTITUTION §3 -->
+- R1: `LruCache(capacity)` accepts `capacity` as a required positional-or-keyword `int`. Any `capacity <= 0` raises `ValueError("capacity must be a positive integer")` in `__init__`; the instance is not created. _(Sources: ticket §3, §6, §10, §12.1, §14 inferred-1)_
+- R2: `LruCache(capacity=N)` for any integer `N >= 1` constructs successfully with an empty cache and all counters at 0. _(Sources: ticket §3, §12.2, §12.9)_
+- R3: `get(key, default=None)` returns the stored value for `key` and promotes that key to most-recently-used (MRU); on a hit, `hits` increments by 1. _(Sources: ticket §3, §7, §12.4)_
+- R4: `get(key, default=None)` on a missing key returns `default` (which is `None` when the caller omits it) and increments `misses` by 1. A miss does not mutate stored entries or ordering. _(Sources: ticket §3, §6, §10, §12.3, §13 Q1)_
+- R5: `put(key, value)` inserts a new key/value pair or updates an existing key, and in both cases promotes the key to MRU. Returns `None`. _(Sources: ticket §3, §7, §12.7)_
+- R6: When `put` inserts a NEW key into a cache already at capacity, the LRU entry is evicted before/around the insert, `evictions` increments by 1, and the resulting `size` equals `capacity`. The evicted entry is exactly the least-recently-used one. _(Sources: ticket §3, §10, §11, §12.5, §12.6)_
+- R7: `put` on an EXISTING key updates the value and promotes it to MRU without incrementing `evictions` and without changing `size`. _(Sources: ticket §3, §12.7, §14 inferred-4)_
+- R8: `stats` is a read-only property that returns a fresh `CacheStats` instance on each access (a snapshot, not a live view), with integer fields `hits`, `misses`, `evictions`, `size`. `size` reflects the current live entry count (`0 <= size <= capacity`). _(Sources: ticket §3, §7, §12.8, §13 Q2, §14 inferred-5)_
+- R9: All counters (`hits`, `misses`, `evictions`) start at 0 on a fresh instance, are non-negative, and never decrement over the lifetime of the instance (no reset mechanism exists). _(Sources: ticket §3, §7, §12.9, §14 inferred-3)_
+- R10: `get` and `put` are O(1) amortized. Structural requirement, non-negotiable for an LRU cache (CONSTITUTION §6 budgets are TBD but O(1) is definitional). _(Sources: ticket §11, §12.10)_
+- R11: Keys may be any hashable Python object and values any Python object; no type validation beyond hashability is performed. An unhashable key raises `TypeError` naturally from the underlying mapping — no special handling. _(Sources: ticket §6, §10, §14 inferred-2)_
+- R12: `CacheStats` is a frozen dataclass defined in the same module (`src/tokenlab/cache.py`) and importable directly from it. _(Sources: ticket §3, §15 CacheStats definition)_
 
 ## 3. Non-goals
 
-Explicitly out of scope (ticket §4). Listed so reviewers do not treat their absence as a gap.
-
-- No persistence to disk, database, or any external store — purely in-memory for the instance lifetime.
-- No external runtime dependencies — standard library only (CONSTITUTION §1).
-- No TTL / time-based expiry — eviction is recency-and-capacity driven only.
-- No size/weight-based eviction — entries are counted by key, not by byte weight.
-- No async API — synchronous methods only.
-- No serialization / pickling support beyond whatever Python provides by default.
-- No CLI, no HTTP surface, no UI of any kind.
-- No internal locking / thread-safety guarantee (R17, §4.1 D1) — explicitly a non-goal, not an omission.
+- Thread-safety / locking — `LruCache` is single-threaded only (ticket §4, §13 Q3).
+- `reset_stats()` or any counter-clearing method (ticket §4, §14 inferred-3).
+- TTL / time-based expiry (ticket §4).
+- Async interface (ticket §4).
+- Persistence / distributed caching (ticket §4, §8).
+- Byte-size / memory-based capacity (capacity is entry-count only) (ticket §4).
+- Typed generics (`LruCache[K, V]`) — plain `Any` key/value is acceptable (ticket §4).
+- Any public API beyond `get`, `put`, `stats` (ticket §4).
 
 ## 4. Architecture
 
-A single class in one module:
+Single module, single product class, single supporting dataclass — no multi-component collaboration, so no sequence diagram is required (fewer than 3 collaborators).
 
 ```
 src/tokenlab/cache.py
-    class LruCache                       # the only public name
-        __init__(self, capacity: int)
-        get(self, key, default=None)
-        put(self, key, value) -> None
-        peek(self, key, default=None)
-        remove(self, key) -> bool
-        clear(self) -> None
-        reset_stats(self) -> None
-        __contains__(self, key) -> bool
-        __len__(self) -> int             # convenience; == size (see §4.1 D6)
-        # read-only properties: hits, misses, evictions, size, capacity
-    (the backing OrderedDict and counters are instance-private)
+├── CacheStats   (frozen dataclass: hits, misses, evictions, size — all int)
+└── LruCache
+    ├── __init__(self, capacity: int)
+    │     validates capacity > 0; raises ValueError otherwise
+    │     creates internal collections.OrderedDict store + int counters
+    ├── get(self, key, default=None) -> Any
+    ├── put(self, key, value) -> None
+    └── stats (property) -> CacheStats   (fresh snapshot per access)
 ```
 
-Control flow (single in-process collaborator, no diagram warranted):
-
-1. Caller constructs `LruCache(capacity)`; the constructor validates `capacity >= 1` or raises
-   `ValueError` (R2).
-2. `get` looks the key up in the backing store. Hit → move to most-recently-used end, bump
-   `hits`, return value (R3, R9). Miss → bump `misses`, return `default` (R4).
-3. `put` checks for an existing key. Existing → overwrite + move to MRU, `size` unchanged (R6).
-   New → if at capacity, evict LRU end + bump `evictions` (R7), then insert at MRU end and grow
-   `size` (R5). Both paths leave the entry most-recently-used (R8).
-4. `__contains__` / `peek` look up presence/value WITHOUT reordering and WITHOUT touching
-   counters (R12).
-5. `remove` deletes a present entry and shrinks `size`; on an absent key behaves per §4.1 D4
-   (R13). `clear` empties entries per §4.1 D9 (R14). `reset_stats` zeroes counters only (R11).
-
-Boundary discipline (CONSTITUTION §5, §3): keys come from an in-process trusting caller; the only
-validated input is `capacity`, validated at the constructor boundary with the error raised at its
-origin. An unhashable key is allowed to surface the underlying mapping's natural `TypeError`
-unwrapped (R15) — the function does not catch-and-swallow.
-
-### 4.1 Pinned implementer decisions (ticket §14 "Decisions taken")
-
-Each autonomous technical choice the ticket deferred is pinned here with a one-line rationale,
-per the spec-architect mandate that delegated choices be disclosed.
-
-- **D1 — Thread-safety model: NOT thread-safe; no internal lock (R17).** Rationale: the ticket's
-  default expectation is "not thread-safe unless the SDD states otherwise"; an unlocked structure
-  keeps `get`/`put` allocation-free and amortized O(1) (D2), and callers needing concurrency
-  compose their own lock around the instance.
-- **D2 — Internal data structure: `collections.OrderedDict` with `move_to_end`/`popitem(last=False)` (R16).**
-  Rationale: stdlib-only (CONSTITUTION §1), provides amortized O(1) insert / lookup / move-to-end /
-  pop-oldest, and yields true-LRU recency without a hand-rolled doubly-linked-list + dict, keeping
-  the implementation small and review-friendly.
-- **D3 — Exception classes beyond `ValueError`: none introduced.** Rationale: the only validated
-  input is `capacity` (→ `ValueError`, R2); unhashable keys surface the mapping's natural
-  `TypeError` (R15, D5). No custom exception hierarchy is warranted for a primitive this small.
-- **D4 — `remove(key)` on an absent key: no-op returning `False` (never raises) (R13).** Rationale:
-  a forgiving idempotent remove is the least-surprising default for a cache (mirrors
-  `set.discard`), avoids forcing callers to pre-check membership, and the boolean return lets a
-  caller distinguish "was present and removed" (`True`) from "was absent" (`False`) without an
-  exception-control-flow path.
-- **D5 — Unhashable key handling: propagate the underlying `OrderedDict` `TypeError` unwrapped (R15).**
-  Rationale: ticket §6/§14 default; adding custom validation would only restate Python's own
-  contract and violate CONSTITUTION §3 ("raise errors at the boundary they originate from").
-- **D6 — Statistics accessor shape: five individual read-only `@property` accessors
-  (`hits`, `misses`, `evictions`, `size`, `capacity`), each returning an `int` (R10).** Rationale:
-  properties give natural attribute-style reads (`cache.hits`) the ticket success criteria are
-  written against, prevent external mutation of counters, and avoid the allocation a
-  snapshot-object/namedtuple accessor would incur on every read. `size` is also exposed via
-  `__len__` for idiomatic `len(cache)`.
-- **D7 — Counter-reset method name: `reset_stats()` (R11).** Rationale: the ticket names
-  `reset_stats()` as the canonical option ("`reset_stats()` (or equivalent)"); choosing the
-  literal name keeps the test harness and any future caller aligned with the ticket vocabulary.
-- **D8 — `peek` accessor shape: `peek(key, default=None)` returning the stored value or `default`,
-  without reordering recency and without touching `hits`/`misses` (R12).** Rationale: provides a
-  value-returning inspection companion to the boolean `__contains__`; mirroring `get`'s
-  `(key, default)` signature keeps the surface consistent while the non-recency, non-counting
-  semantics satisfy the ticket's "non-recency-affecting membership check" requirement.
-- **D9 — Effect of `clear()` on statistics counters: `clear()` empties entries only and does NOT
-  reset `hits`/`misses`/`evictions` (R14).** Rationale: the ticket mandates only that
-  `reset_stats` does not clear entries and leaves the converse unspecified; keeping the two
-  operations orthogonal (entries vs. counters) gives callers independent control — emptying the
-  cache should not silently erase the lifetime hit/miss/eviction history, and a caller wanting
-  both calls `clear()` then `reset_stats()`. `capacity` is unchanged by `clear()` (R14).
+Internal collaborators: one `collections.OrderedDict` (the store) and three plain `int` counters (`_hits`, `_misses`, `_evictions`). `size` is derived from `len(store)` at snapshot time — not stored separately — so it can never drift from the actual entry count.
 
 ## 5. API contract
 
-Not applicable — there is no HTTP/network interface. The "interface" is the Python class surface,
-fully specified by R1–R18 and the signatures in §4. **No `/docs/api/lru-cache.openapi.yaml` is
-produced.**
-
-Class surface (authoritative):
+No HTTP API — this is an in-process library class. No OpenAPI artifact. Public Python surface:
 
 ```python
+@dataclass(frozen=True)
+class CacheStats:
+    hits: int
+    misses: int
+    evictions: int
+    size: int
+
 class LruCache:
-    def __init__(self, capacity: int) -> None: ...           # R2; ValueError if capacity < 1
-    def get(self, key, default=None): ...                    # R3 (hit), R4 (miss), R9
-    def put(self, key, value) -> None: ...                   # R5, R6, R7, R8
-    def peek(self, key, default=None): ...                   # R12, D8 — no recency/counter effect
-    def remove(self, key) -> bool: ...                       # R13, D4 — False if absent (no raise)
-    def clear(self) -> None: ...                             # R14, D9 — entries only
-    def reset_stats(self) -> None: ...                       # R11, D7 — counters only
-    def __contains__(self, key) -> bool: ...                 # R12 — no recency/counter effect
-    def __len__(self) -> int: ...                            # == size (D6)
+    def __init__(self, capacity: int) -> None: ...
+    def get(self, key: Any, default: Any = None) -> Any: ...
+    def put(self, key: Any, value: Any) -> None: ...
     @property
-    def hits(self) -> int: ...                               # R10, D6
-    @property
-    def misses(self) -> int: ...                             # R10, D6
-    @property
-    def evictions(self) -> int: ...                          # R10, D6
-    @property
-    def size(self) -> int: ...                               # R10, D6
-    @property
-    def capacity(self) -> int: ...                           # R10, D6
+    def stats(self) -> CacheStats: ...
 ```
+
+### 5.1 Pinned implementer decisions (from ticket §15 + §14)
+
+These are locked by intake; recorded here for the autopilot final-report disclosure. `developer` MUST follow them; reopening requires a CLARIFY citing a constitution conflict or functional gap.
+
+| # | Decision | Rationale (one line) |
+|---|---|---|
+| D1 | **Data structure:** internal store is a single `collections.OrderedDict`. | Stdlib, O(1) `move_to_end` and O(1) `popitem` on CPython 3.7+ — satisfies R10 with no third-party dependency (CONSTITUTION §1). |
+| D2 | **LRU mechanics:** `get` hit calls `store.move_to_end(key)`; `put` on existing key updates then `move_to_end(key)`; `put` on new key assigns at end, and if `len(store) > capacity` after insert, `store.popitem(last=False)` evicts the LRU entry. | Standard OrderedDict LRU idiom; insert-then-trim keeps the new key from being a candidate for its own eviction, satisfying R6's "evicted entry is exactly the LRU one". |
+| D3 | **Thread-safety model:** none — no `threading.Lock`, no `contextlib` guards. | Ticket §4 / §13 Q3 declare single-threaded use out of scope; adding locking would contradict the locked non-goal. |
+| D4 | **Eviction mechanics:** eviction is via `popitem(last=False)` and `_evictions += 1`; an update of an existing key never evicts. | Counted, non-silent (CONSTITUTION §2.3); satisfies R6/R7. |
+| D5 | **Exception classes:** only `ValueError` is raised explicitly (invalid capacity, R1). `TypeError` for unhashable keys is allowed to propagate naturally from the dict; no custom exception classes are introduced. | Ticket §6/§10/§14 inferred-1; introducing custom exceptions would exceed the locked surface and add no caller value. |
+| D6 | **Stats representation:** three private `int` counters on the instance (`_hits`, `_misses`, `_evictions`); `size` derived from `len(store)`; `stats` property constructs a fresh frozen `CacheStats` each call. | Snapshot-not-live (R8) prevents callers mutating internal state; deriving `size` avoids drift; frozen dataclass gives value semantics and immutability. |
+| D7 | **Module layout:** both `CacheStats` and `LruCache` live in `src/tokenlab/cache.py`; absolute import path `tokenlab.cache`. | Ticket §15; CONSTITUTION §3 (absolute imports from project root). |
+| D8 | **Capacity attribute exposure:** `capacity` stored as a public read-only-by-convention instance attribute `self.capacity`; not part of the mandated surface but harmless and aids debugging/tests. | Technical method, in-stack; no behavior change. If review objects it can be made private without spec change. |
+| D9 | **Class name `LruCache` (deliberate §3 deviation):** the class is named `LruCache`, NOT the §3-conformant `LRUCache`. This is intentional and accepted. | `LRU` is a ≤3-letter acronym, so CONSTITUTION §3 ("acronyms ≤3 letters stay uppercase") would prescribe `LRUCache`. However the name `LruCache` is the user's **literal locked requirement** (ticket §1, §3), not a free spec choice, and matches stdlib precedent (`functools.lru_cache`). §3 is a style anchor (guidance), not a §2 non-negotiable; it does not authorize silently overwriting an explicit locked user requirement. The deviation is a tracked **minor** (BACKLOG `B-008`), NOT an unresolved major. A `§P` exception is intentionally NOT used: per §11.2 a project section may not contradict §3, so it cannot grant this carve-out. Resolution path if ever reversed: a §11.1 forge amendment or a new autopilot run re-locking the name. |
 
 ## 6. Data model
 
-No *persisted* state — the cache holds no data beyond the lifetime of the instance and writes
-nothing to any external store (ticket §8). **No `/docs/data-models/lru-cache.md` is produced.**
-The in-memory layout, described inline for reviewer clarity:
-
-| Internal member | Type | Purpose | Notes |
-| --- | --- | --- | --- |
-| `_store` | `collections.OrderedDict[Any, Any]` | key → value, ordered LRU (front) → MRU (back) | D2; insertion/`move_to_end` keeps recency order |
-| `_capacity` | `int` (`>= 1`) | maximum entry count | set at construction (R2), never mutated by ops |
-| `_hits` | `int` (`>= 0`) | cumulative hit count | bumped by R3/R9; zeroed only by `reset_stats` (R11) |
-| `_misses` | `int` (`>= 0`) | cumulative miss count | bumped by R4; zeroed only by `reset_stats` (R11) |
-| `_evictions` | `int` (`>= 0`) | cumulative eviction count | bumped by R7; zeroed only by `reset_stats` (R11) |
-
-`size` is derived as `len(self._store)` (not a stored counter), so it cannot drift from the actual
-entry count. `capacity` is exposed read-only from `_capacity`.
+No persisted state. All state is in-memory for the lifetime of the `LruCache` instance (ticket §8). No data-model artifact required.
 
 ## 7. Failure modes
 
-- **Input validation:**
-  - **Invalid `capacity`** (`0`, negative) at construction → raises `ValueError` (R2). Fatal to
-    construction; the caller recovers by passing a valid `capacity`. A non-`int` `capacity`
-    (e.g. `1.5`, `"3"`) is outside the typed contract; the spec does not mandate a specific
-    error for it beyond not silently accepting it — see §9 OQ-2.
-  - **Unhashable key** to any key-accepting method → the underlying `OrderedDict` raises
-    `TypeError`, propagated unwrapped (R15, D5). Not caught or wrapped.
-- **`remove(key)` on an absent key** → no-op, returns `False`, never raises (R13, D4).
-- **`get` / `peek` on an absent key** → returns `default`; no exception (R4, R12).
-- **External-service failure:** none — there are no external dependencies (ticket §9).
-- **Concurrency:** the cache is **not thread-safe** (R17, D1). Concurrent mutation from multiple
-  threads may corrupt recency order or counters; serializing access is the caller's
-  responsibility. This is a documented limitation, not a handled failure mode.
-- **Silent data loss (CONSTITUTION §2.3):** eviction (R7) intentionally drops the LRU entry, which
-  is the documented contract of a bounded cache, not unexpected user-data loss. It is surfaced via
-  the `evictions` counter (R7, R10) so a caller can observe drop volume; no log line is emitted
-  (see §10 justification). Overwrite (R6) replacing a prior value is likewise the documented
-  contract, observable by the caller via the value it just supplied.
+- **Input validation (R1):** `capacity <= 0` (including non-positive ints) → raise `ValueError("capacity must be a positive integer")` in `__init__`; instance not created. Fatal, caller-facing. Non-int `capacity` is out of scope for explicit handling — passing a non-int is a programming error; comparison/usage will raise naturally (`TypeError`). Documented, not specially handled.
+- **Miss (R4):** `get` on empty cache or absent key → return `default`, increment `misses`. Expected/recoverable; not an error.
+- **Capacity overflow (R6):** `put` of a new key at capacity → evict LRU, increment `evictions`, insert. Expected/recoverable; counted, never silent (CONSTITUTION §2.3).
+- **Unhashable key (R11):** `get`/`put` with an unhashable key → `TypeError` propagates from the underlying dict. Caller's responsibility; no catch-and-swallow (CONSTITUTION §3 errors-at-boundary).
+- **External-service failure:** N/A — no network, no I/O, no external services.
+- **Concurrency:** out of scope — single-threaded contract (D3). Behavior under concurrent access is explicitly undefined and not tested.
 
 ## 8. Acceptance criteria
 
-1:1 mapping to requirements (test-engineer cites Rn).
+1:1 mapping to requirements (criteria also align to ticket §12):
 
-- R1 → `from tokenlab.cache import LruCache` succeeds; `LruCache` is a class; the module exposes no other public name.
-- R2 → `LruCache(1)` and `LruCache(128)` construct; `LruCache(0)` and `LruCache(-1)` each raise `ValueError`.
-- R3 → after `c.put("a", 1)`, `c.get("a") == 1`, `c.hits` increased by one, and `"a"` is now most-recently-used (protected from the next eviction).
-- R4 → on a fresh `c`, `c.get("missing") is None`, `c.get("missing", 7) == 7`, `c.misses` increased by two, and `"missing"` was not inserted (`"missing" not in c`).
-- R5 → `c = LruCache(3); c.put("a", 1)` gives `c.size == 1`; two more new keys give `c.size == 3`.
-- R6 → `c.put("a", 1); c.put("a", 2)` leaves `c.size == 1` and `c.get("a") == 2`, with `"a"` most-recently-used.
-- R7 → `c = LruCache(2); c.put("a",1); c.put("b",2); c.put("c",3)` leaves `c.size == 2`, `c.evictions == 1`, `"a" not in c`, `"b" in c`, `"c" in c`.
-- R8 → `c = LruCache(2); c.put("a",1); c.put("b",2); c.get("a"); c.put("c",3)` evicts `"b"` (not `"a"`), because the `get("a")` refreshed `"a"`'s recency; `"a" in c`, `"b" not in c`.
-- R9 → `c.put("k", None)`; `c.get("k") is None` AND `c.hits` increased by one; contrasted with `c.get("absent") is None` AND `c.misses` increased — same return value, different counter.
-- R10 → after a scripted sequence of puts/gets/evicts, `c.hits`, `c.misses`, `c.evictions`, `c.size`, `c.capacity` each equal the independently computed expected `int`; each is read-only (assignment raises `AttributeError`).
-- R11 → after operations produce non-zero counters, `c.reset_stats()` makes `c.hits == c.misses == c.evictions == 0` while `c.size` and `c.capacity` are unchanged and the cached entries are still retrievable; a subsequent `get` hit makes `c.hits == 1`.
-- R12 → `c.put("a",1)`; `("a" in c) is True` and `("z" in c) is False`; neither changes `c.hits`/`c.misses`; `c.peek("a") == 1` and `c.peek("z") is None` likewise leave counters and recency order unchanged (verified by checking the eviction victim is unaffected by a preceding `peek`).
-- R13 → `c.put("a",1); c.remove("a")` returns `True`, leaves `c.size == 0`, and `c.get("a")` is a miss; `c.remove("absent")` returns `False` and raises nothing.
-- R14 → after several puts, `c.clear()` gives `c.size == 0`, `c.capacity` unchanged, and (per D9) `c.hits`/`c.misses`/`c.evictions` are NOT reset by `clear()`.
-- R15 → `c.get(["unhashable"])`, `c.put(["unhashable"], 1)`, `c.remove({"a"})`, and `["x"] in c` each raise `TypeError` (the natural mapping error), not `ValueError` or a custom type.
-- R16 → structural check (performance-analyst): `get`/`put`/`remove`/`__contains__`/`peek` contain no O(n) scan over `_store`; the backing structure is the `OrderedDict` of D2. (No timing budget per CONSTITUTION §6.)
-- R17 → `LruCache` and/or its module docstring states it is not thread-safe; no `threading.Lock`/`RLock` is acquired in any method (source check is acceptable evidence).
-- R18 → `LruCache.__doc__`, `LruCache.get.__doc__`, and `LruCache.put.__doc__` are each non-empty strings covering purpose, recency semantics, and the relevant contract.
+- R1 → `LruCache(capacity=0)` and `LruCache(capacity=-1)` each raise `ValueError`; no instance is bound.
+- R2 → `LruCache(capacity=N)` for `N in {1, 2, 100}` constructs; immediately `stats == CacheStats(0, 0, 0, 0)`.
+- R3 → after `put("a", 1)`, `get("a")` returns `1` and `stats.hits == 1`; the accessed key is now MRU.
+- R4 → `get("absent")` returns `None`; `get("absent", "x")` returns `"x"`; each call increments `stats.misses` by 1; stored entries unchanged.
+- R5 → `put` then `get` round-trips the value; a second `put` on the same key with a new value, then `get`, returns the new value.
+- R6 → into capacity `N=2`: `put("a",1); put("b",2); put("c",3)` leaves `size == 2`, `evictions == 1`, and `"a"` (the LRU) absent while `"b"`,`"c"` present.
+- R6 (LRU correctness) → `put("a",1); put("b",2); get("a"); put("c",3)` evicts `"b"` (now LRU), not `"a"` (recently accessed). `get("a")` still hits.
+- R7 → into capacity `N=2`: `put("a",1); put("b",2); put("a",9)` leaves `size == 2`, `evictions == 0`; `get("a") == 9`.
+- R8 → `stats` returns a `CacheStats` instance; all fields are `int`; `stats.size` equals current entry count; mutating a returned snapshot raises (frozen) and does not affect later snapshots.
+- R9 → fresh instance has `hits == misses == evictions == 0`; counters only increase across a sequence of operations; no API exposes a decrement or reset.
+- R10 → structural: implementation uses `collections.OrderedDict` with `move_to_end` / `popitem(last=False)` (verified by code review, not a timing test).
+- R11 → tuple and frozenset keys work; `get`/`put` with a `list` key raises `TypeError` (not caught by the class).
+- R12 → `from tokenlab.cache import CacheStats, LruCache` succeeds; `CacheStats` is a frozen dataclass.
 
 ## 9. Open questions
 
-The ticket §14 lists inferred assumptions and explicitly-deferred decisions. Per the
-spec-architect operating rule, items the user did not lock are recorded here for qa-reviewer to
-verify intent. Each is resolved into a requirement and/or a §4.1 pin with a cited default; none
-blocks the pipeline — all are consistent with the constitution and the ticket's confirmed §13
-answers. qa-reviewer should confirm each chosen default matches user intent before release.
+None. All ticket §14 inferred assumptions are adopted as written (intake closed; per autopilot rules a non-URGENT CLARIFY to intake means "use the §14 inferred assumption and proceed"). The pipeline may advance.
 
-- OQ-1 — All six "Decisions taken" (thread-safety, data structure, exception classes, remove-on-absent, stats-accessor shape, reset_stats naming + clear-stats behavior) are pinned in §4.1 D1–D9 per the ticket's explicit delegation to spec-architect. No conflict with the constitution. These are *delegated choices now made*, not unanswered blockers.
-- OQ-2 — Non-`int` `capacity` (e.g. `1.5`, `"3"`): the ticket §6 specifies validation against `>= 1` for the integer case but is silent on the wrong *type*. Default resolved in §7: the constructor does not silently accept a non-`int`; the `>= 1` comparison either rejects it (`ValueError` for a comparable numeric like `0.5`) or a `TypeError` surfaces for an incomparable type (e.g. `"3"`). The spec does not over-constrain the exact type beyond "not silently accepted." No conflict; qa-reviewer to confirm this is acceptable rather than requiring an explicit `isinstance` check.
-- OQ-3 — `peek` is provided in addition to `__contains__` (D8). The ticket §3/§13 Q7 phrases the membership check as "`__contains__` / `peek`" (either/both); this SDD provides both for a complete inspection surface. No conflict; qa-reviewer to confirm providing both (rather than only `__contains__`) matches intent.
-- OQ-4 — `remove` returns a `bool` and `put` returns `None` (D4, §5). The ticket §7 left mutation return shapes to the implementer; the chosen shapes are recorded. No conflict.
-- OQ-5 — Standard-library-only, in-memory-only, unhashable-key-`TypeError`, no-observability, and no-perf-SLA assumptions (ticket §14 inferred list) are all confirmed consistent with CONSTITUTION §1, §6, §8 and reified in R15/R16/§10. No conflict discovered; nothing overridden.
-
-> The pipeline rule is "do not advance until §9 is empty." These entries are *resolved
-> assumptions / delegated-choices-now-made awaiting user/qa confirmation*, not unanswered
-> blockers — each is already reified into a requirement and/or a §4.1 pin with a default
-> consistent with the locked ticket and the constitution. If qa-reviewer or the user overrides
-> any default, the corresponding Rn / Dn changes and this section's entry is struck. No entry
-> here halts development.
+**Tracked deliberate deviation (not an open question):** the class name `LruCache` deviates from CONSTITUTION §3 acronym-casing (which prescribes `LRUCache`). This is intentional — the name is a locked user requirement (ticket §1/§3) with stdlib precedent (`functools.lru_cache`) — and is recorded in §5.1 D9 and tracked as a **minor** in `BACKLOG.md` (`B-008`). Per CONSTITUTION §12.1, a minor stays in the backlog and does not block convergence. code-reviewer's REJECT on this point is **downgraded from major to minor** on this basis; no rename is performed.
 
 ## 10. Observability plan
 
 ### 8a — Operational events (always required)
 
-CONSTITUTION §8a requires "every business-meaningful state change" to emit one structured log
-line, where business-meaningful means "anything an auditor, support engineer, or product manager
-would want to reconstruct after the fact." `LruCache` is an **in-process library data structure**:
-it performs no I/O, no persistence, and no network call; every method is synchronous and observable
-entirely through its return value, the read-only stats properties (R10), or a propagated exception.
-Its state changes (insert, overwrite, hit, miss, eviction, remove, clear) are local data-structure
-mutations, not business events — the *caller* is the boundary that owns the `trace_id`/`actor_id`/
-`resource_id` context and decides whether a given cache operation is business-meaningful enough to
-log. Emitting a structured log line from inside the primitive would (a) attach no correlation
-context the cache legitimately possesses, (b) duplicate or pre-empt the caller's own boundary
-logging, and (c) inject an I/O side effect into a structure the ticket (§7, §8) specifies as
-in-memory and side-effect-free.
+`LruCache` is a pure in-memory utility with no business-meaningful state change, no actor, no resource ID, and no external boundary. Per CONSTITUTION §8a, structured event logging targets *business-meaningful* state changes that an auditor, support engineer, or PM would reconstruct after the fact. Cache get/put/evict are not such events — they are internal memoization mechanics local to a single process and instance. Emitting logs from a hot O(1) path would also violate the §8a "no printf in production paths" spirit and the R10 performance intent.
 
-The one state change that drops data — eviction — is the documented contract of a bounded cache,
-not silent loss (CONSTITUTION §2.3): it is surfaced to the caller via the `evictions` counter
-(R7, R10), which is the in-process equivalent of "log + surface the loss" appropriate to a library
-primitive. A caller that needs an eviction *log line* reads the counter and logs it with its own
-correlation context.
-
-**Therefore this feature emits no structured operational log line, and that is the correct reading
-of §8a, not an omission.** The mapping "every spec-mandated success criterion and failure mode has
-a corresponding logged event" is satisfied via the directly-asserted return/raise/counter behavior
-in the §8 acceptance tests rather than by log inspection. `observability-auditor` should verify
-this justification rather than expect an event-table row.
+**Decision: no structured log events are required for normal cache operations**, confirming ticket §11. The table below documents the single deliberate operational concern (eviction) and why it is intentionally NOT logged, so `observability-auditor` can verify the spec→event mapping resolves to "none, by design".
 
 | Spec ref | Event name (enum const) | Level | Key fields | Metric / Alert |
 | --- | --- | --- | --- | --- |
-| — | _none — in-process library primitive, no business state change; eviction surfaced via `evictions` counter (R7, R10), see justification above_ | — | — | — |
+| R6 eviction | _none — intentionally not logged_ | n/a | n/a | Eviction is exposed via `stats.evictions` (caller-pollable counter), not a log line. No process-global metric or alert: eviction is normal, expected, per-instance behavior, not a degradation. |
+| R1 invalid capacity | _none — caller-facing exception_ | n/a | n/a | Surfaced as a `ValueError` to the caller at construction; the caller's own observability layer records it if relevant. Library does not own a logger. |
 
-> §8b (audit), §8c (analytics), §8d (security events) are all `scope: disabled` in CONSTITUTION
-> §8 and the ticket §11 — their tables are intentionally omitted per the template rule. No audit,
-> analytics, or security-monitoring events are introduced by this feature.
+> §8b audit, §8c analytics, §8d security monitoring are all `[scope: disabled]` in CONSTITUTION §8 — tables omitted per template instructions.
 
 ## 10.1 Test execution requirements
 
 Inherited from CONSTITUTION §4. No feature-specific exceptions.
 
-- Local isolation: inherit §4.1 — none needed; `LruCache` is a pure in-memory structure requiring
-  no external infrastructure. Tests run in-process with pytest, no services.
-- E2E policy: inherit §4.3 — disabled; unit tests are sufficient. Tests live at
-  `tests/unit/test_cache.py` (ticket §3, §12).
-- Coverage target: inherit §4 coverage floor (0 %, tracked not gated). Coverage is a smoke alarm
-  here, not a goal; the acceptance criteria in §8 are the real bar.
+- **Local isolation:** inherit §4.1 — none needed; tests are pure in-memory, no external infrastructure.
+- **E2E policy:** inherit §4.3 — disabled; unit tests at `tests/unit/test_cache.py` are sufficient. No integration suite required (no external boundary to integrate against).
+- **Coverage target:** inherit §4 — floor is 0% (tracked, not gated). Coverage is a smoke alarm; tests should cover every Rn acceptance criterion above regardless of the numeric floor.
+- **TDD policy:** inherit §4.2 — spec-derived-post-impl; `test-engineer` writes tests from this spec after `developer`, citing the Rn numbers.
