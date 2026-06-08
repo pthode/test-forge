@@ -146,6 +146,33 @@ Tech debt, deferred fixes, and known cleanup items. Reviewers append entries dur
 - **Suggested fix:** `src/tokenlab/cache.py:35-37` — existing-key branch does `self._store[key] = value` then `move_to_end(key)`. Correct (assignment doesn't reorder), but a brief `# assignment preserves order; promote to MRU explicitly` comment prevents a future reader deleting the call as redundant (§3 "explain why").
 - **Deadline:** 2026-09-08
 
+## B-016 — README inline comments use `cache.stats.hits` (property form) instead of `cache.stats().hits`
+
+- **Created:** 2026-06-08
+- **Source:** qa-reviewer finding during feature `lru-cache` (1.17.3 run) iteration 1
+- **Type:** docs
+- **Severity:** minor (singleton)
+- **Suggested fix:** `README.md:145-146` — inline Python comments read `cache.stats.hits` / `cache.stats.misses`, but `stats` is a method; the correct form is `cache.stats().hits`. The surrounding executable code (lines 141, 153) is already correct. Comment-only fix; no executable error.
+- **Deadline:** 2026-09-08
+
+## B-017 — BACKLOG B-012 is stale (`self._capacity` already used); close/archive
+
+- **Created:** 2026-06-08
+- **Source:** qa-reviewer finding during feature `lru-cache` (1.17.3 run) iteration 1
+- **Type:** cleanup
+- **Severity:** minor (singleton)
+- **Suggested fix:** B-012 describes `self.capacity = capacity` as a writable public attribute, but the current code uses `self._capacity` throughout (`cache.py:64,114`). The finding is already satisfied; B-012 should be moved to "Closed entries" during next `backlog-curator` grooming.
+- **Deadline:** 2026-09-08
+
+## B-018 — B-009 and B-015 carry stale artifact references after `_store` → `_entries` rename
+
+- **Created:** 2026-06-08
+- **Source:** code-reviewer finding during feature `lru-cache` (1.17.3 run) iteration 1
+- **Type:** cleanup
+- **Severity:** minor (singleton)
+- **Suggested fix:** B-009 cites `cache.py:52-55 — self._store`; current code is `cache.py:86-89 — self._entries` (get hit path). B-015 cites `cache.py:35-37 — self._store[key] = value`; current code is `cache.py:110-112 — self._entries[key] = value` (put update path). Quality observations remain valid; only the citations need updating. Candidate for `backlog-curator` to handle alongside B-017.
+- **Deadline:** 2026-09-08
+
 <!-- Reviewers append entries here. Format per CONSTITUTION.md §12.2. -->
 
 ## Closed entries (audit trail — one release cycle)

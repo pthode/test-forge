@@ -4,119 +4,123 @@
 
 ## 1. One-line summary
 
-Add a bounded in-memory LRU cache class (`LruCache`) to `tokenlab` that evicts the least-recently-used entry on capacity overflow and exposes hit/miss/eviction/size statistics.
+Add a bounded in-memory LRU cache class to tokenlab that evicts the least-recently-used entry when capacity is exceeded and exposes cumulative hit/miss/eviction/size statistics.
 
 ## 2. Context
 
-`tokenlab` currently has no caching primitive. A general-purpose LRU cache is needed to support callers that want to memoize expensive computations (e.g. token measurements) without pulling in external dependencies. The implementation must stay within the Python 3.12 standard library in keeping with the project's zero-runtime-dependency policy (CONSTITUTION §1).
+tokenlab is a stdlib-only Python 3.12 library. The LRU cache is a general-purpose primitive to be used internally and by library consumers for bounding memory use in key→value lookup scenarios. There is no existing caching primitive in the codebase. It replaces ad-hoc dict usage in contexts where eviction under memory pressure is required.
 
 ## 3. In scope
 
-- `LruCache` class at `src/tokenlab/cache.py`.
-- `get(key, default=None)` — returns the cached value for `key`, promoting it to MRU; returns `default` (None by default) on a miss. A miss increments the miss counter.
-- `put(key, value)` — inserts or updates a key/value pair, promoting the key to MRU. On insert that would exceed capacity, evict the LRU entry first (increments eviction counter). Updating an existing key does NOT increment evictions.
-- `stats` read-only property returning a `CacheStats` dataclass with fields: `hits` (int), `misses` (int), `evictions` (int), `size` (int).
-- `CacheStats` dataclass defined in the same module.
-- `capacity` constructor parameter (required, positional or keyword); must be a positive integer — any value ≤ 0 raises `ValueError`.
+- `LruCache` class at `src/tokenlab/cache.py`, importable as `from tokenlab.cache import LruCache`.
+- Constructor: `LruCache(capacity: int)` — sets a fixed maximum number of entries.
+- `get(key, default=None)` — returns the value if the key exists (promoting it to MRU), otherwise returns `default`.
+- `put(key, value)` — inserts or updates the entry and promotes it to MRU. If the cache is at capacity and the key is new, evicts the LRU entry first.
+- `stats()` — returns a dataclass or namedtuple with fields `hits`, `misses`, `evictions`, `size` (current entry count).
+- Cumulative stats tracked from construction; no reset mechanism.
+- Raising `ValueError` on construction when `capacity` is 0 or negative.
 - Unit tests at `tests/unit/test_cache.py`.
 
 ## 4. Out of scope (explicit non-goals)
 
-- Thread-safety / locking — `LruCache` is explicitly single-threaded.
-- `reset_stats()` or any method to clear statistics counters.
-- TTL / time-based expiry.
-- Async interface.
-- Persistent or distributed caching.
-- Maximum memory / byte-size limiting (capacity is in number of entries only).
-- Typed generics (no `LruCache[K, V]` parameterisation required; plain `Any` key/value is acceptable).
-- Any public API beyond `get`, `put`, and `stats`.
+- Thread safety — no internal locking; callers are responsible for external synchronization.
+- TTL/expiry — entries do not expire by time.
+- Runtime type-checking of keys or values.
+- A stats-reset method.
+- Any persistence (in-memory only; nothing survives process restart).
+- Monitoring instrumentation or structured log events (this is a pure in-memory utility with no I/O boundary; §8a operational observability does not apply here).
+- Any public API beyond `__init__`, `get`, `put`, and `stats`.
 
 ## 5. Actors and triggers
 
-- **Caller code** (any module within `tokenlab` or an importing project) constructs an `LruCache(capacity=N)` instance and calls `get`/`put` directly. No event-driven trigger — purely synchronous, on-demand.
+- **Library consumer (developer)** — instantiates `LruCache`, calls `get`/`put`/`stats` in application code.
+- **test-engineer** — drives the class via pytest unit tests.
+- No end-users, no HTTP surface, no external actors.
 
 ## 6. Inputs
 
-| Parameter | Type | Validation |
-|---|---|---|
-| `capacity` (constructor) | `int` | Must be > 0; raise `ValueError("capacity must be a positive integer")` otherwise. |
-| `key` (`get`, `put`) | Any hashable Python object | No additional validation; unhashable keys raise `TypeError` naturally from the underlying dict. |
-| `value` (`put`) | Any Python object | No restriction. |
-| `default` (`get`) | Any Python object | Optional; defaults to `None`. |
+| Method | Parameter | Type | Validation |
+|--------|-----------|------|------------|
+| `__init__` | `capacity` | `int` | Must be ≥ 1; raises `ValueError` if 0 or negative. Immutable after construction. |
+| `get` | `key` | `Hashable` | No runtime type-check; any hashable value is accepted. |
+| `get` | `default` | `Any` | Optional; defaults to `None`. |
+| `put` | `key` | `Hashable` | No runtime type-check. |
+| `put` | `value` | `Any` | Unrestricted. |
 
 ## 7. Outputs
 
-| Method / Property | Return type | Description |
-|---|---|---|
-| `get(key, default=None)` | `Any` | Cached value, or `default` on miss. |
-| `put(key, value)` | `None` | Mutates cache state; returns nothing. |
-| `stats` | `CacheStats` | Snapshot of counters and current size. `size` reflects the number of entries currently in the cache (0 ≤ size ≤ capacity). |
+| Method | Return type | Description |
+|--------|-------------|-------------|
+| `get` | `Any` | The stored value if key present (key promoted to MRU); otherwise `default`. |
+| `put` | `None` | No return value. Side effects: insert/update entry, evict LRU if necessary. |
+| `stats()` | dataclass or namedtuple | Fields: `hits: int`, `misses: int`, `evictions: int`, `size: int`. |
 
-`CacheStats` fields: `hits: int`, `misses: int`, `evictions: int`, `size: int`. All counters start at 0 and are non-negative; they never decrement.
+`size` reports the current number of entries (not bytes). Stats are cumulative from construction.
 
 ## 8. Persistence
 
-None. All state is in-memory and lives for the lifetime of the `LruCache` instance.
+None. The cache is purely in-memory. All state is lost when the instance is garbage-collected or the process exits.
 
 ## 9. External dependencies
 
-None. Standard library only (CONSTITUTION §1).
+None. Standard library only (`collections.OrderedDict` or equivalent stdlib primitives). No third-party packages.
 
 ## 10. Failure behavior
 
 | Condition | Behavior |
-|---|---|
-| `capacity <= 0` | Raise `ValueError` in `__init__`. Fatal; instance is not created. |
-| `get` on an empty cache or absent key | Return `default`; increment miss counter. Recoverable / expected. |
-| `put` when cache is full | Evict the LRU entry, increment eviction counter, then insert the new entry. Recoverable / expected. |
-| `get`/`put` called with an unhashable key | Python raises `TypeError` naturally. Caller's responsibility; no special handling. |
+|-----------|----------|
+| `LruCache(0)` or `LruCache(-n)` | Raises `ValueError` at construction time. |
+| `get` on missing key | Returns `default` (no exception); increments `misses`. |
+| `put` on existing key | Updates value in place, promotes key to MRU, does NOT increment `evictions`. |
+| `put` on new key when at capacity | Evicts LRU entry first (increments `evictions`), then inserts new entry. |
 
-No external services means no network/IO failure modes.
+No recoverable/fatal distinction beyond the above; there are no I/O boundaries or external services that can fail.
 
 ## 11. Non-functional constraints
 
-- **Standard library only** (CONSTITUTION §1) — no third-party packages.
-- **Single-threaded use only** — no locking is required or provided (agreed A3).
-- **Performance (structural):** `get` and `put` must both be O(1) amortized. (CONSTITUTION §6 budgets are TBD for this project, but O(1) is the definitional requirement for an LRU cache and is non-negotiable.)
-- **No silent data loss** (CONSTITUTION §2.3) — an eviction is a deliberate, counted operation, not a silent drop.
-- **No TODOs left in `main`** (CONSTITUTION §2.5).
-- **Observability:** §8a is `always-on`; however, `LruCache` is a pure in-memory utility with no business-meaningful state changes (no actor_id, no resource_id, no external boundary). No structured log events are required for normal cache operations. `spec-architect` should confirm this in the spec §10 observability plan.
+- **Standard library only** (CONSTITUTION §1) — no third-party runtime or test dependencies.
+- **Python 3.12** (CONSTITUTION §1) — no syntax or APIs beyond 3.12 stdlib.
+- **No `# TODO` in `main`** (CONSTITUTION §2.5).
+- **Naming style** (CONSTITUTION §3): full words, one purpose per function.
+- **Comments explain why, not what** (CONSTITUTION §3).
+- **Coverage:** tracked but not gated (CONSTITUTION §4 — floor is 0%; aim for high unit coverage given the small, pure surface).
+- **Performance budgets** (CONSTITUTION §6): TBD for this library; `O(1)` amortized for `get` and `put` is the standard LRU contract and is expected by downstream consumers. `performance-analyst` will flag non-O(1) implementations as a structural issue.
+- **Accessibility:** N/A — no UI surface (CONSTITUTION §7.2).
+- **Observability:** §8a operational observability does not apply to a pure in-memory utility with no I/O boundary. No structured log events are required for this feature.
 
 ## 12. Success criteria
 
-1. `LruCache(capacity=0)` (and any negative capacity) raises `ValueError`.
-2. `LruCache(capacity=N)` for N ≥ 1 constructs without error.
-3. `get` on a missing key returns the supplied `default` (or `None` when not supplied); `stats.misses` increments by 1.
-4. `put` followed by `get` on the same key returns the stored value; `stats.hits` increments by 1 on the `get`.
-5. After `put`-ing `N+1` distinct keys into a cache of capacity `N`, the cache contains exactly `N` entries; `stats.size == N`; `stats.evictions == 1`.
-6. The evicted entry is the least-recently-used one — verified by confirming that a key accessed (via `get`) before a subsequent set of `put`s is NOT the one evicted when capacity is exceeded.
-7. `put` on an existing key updates the value and promotes the key to MRU; `stats.evictions` does NOT increment.
-8. `stats` is a `CacheStats` dataclass instance; its fields are integers; `stats.size` equals the current number of stored entries.
-9. All counter fields (`hits`, `misses`, `evictions`) start at 0 on a fresh instance.
-10. `get` and `put` have O(1) amortized complexity (structural: implementation uses `dict` + `collections.OrderedDict` or equivalent doubly-linked-list approach).
+1. `from tokenlab.cache import LruCache` succeeds with no import errors on Python 3.12.
+2. `LruCache(0)` raises `ValueError`; `LruCache(-1)` raises `ValueError`; `LruCache(1)` constructs without error.
+3. `get` on a missing key returns `None` when no default is supplied and increments `stats().misses`.
+4. `get` on a missing key returns the supplied default value and increments `stats().misses`.
+5. `get` on a present key returns the correct value, promotes the key to MRU, and increments `stats().hits`.
+6. `put` on a new key inserts the entry; subsequent `get` returns the value.
+7. `put` on an existing key updates the value and promotes to MRU without incrementing `stats().evictions`.
+8. When the cache is at capacity, `put` of a new key evicts the least-recently-used entry (not most-recently-used) and increments `stats().evictions` by 1.
+9. `stats().size` equals the current number of entries (not capacity).
+10. Stats are cumulative: multiple hits, misses, and evictions across calls are summed correctly in `stats()`.
+11. A cache with `capacity=1`: `put(A)`, `put(B)` results in `A` being evicted and only `B` being retrievable.
+12. Access ordering: after `put(A)`, `put(B)`, `get(A)` (making A MRU), `put(C)` should evict B (LRU), not A.
+13. All unit tests pass under `pytest` with no external dependencies.
+14. The implementation uses only the Python 3.12 standard library.
 
 ## 13. Answered questions (intake transcript)
 
 | # | Question | Answer |
 |---|----------|--------|
-| Q1 | Behaviour of `get` on a miss? | Option (b): `get(key, default=None)`; returns `default`; access counts as a miss. |
-| Q2 | Stats accessor shape? | Option (c): `CacheStats` dataclass (`hits`, `misses`, `evictions`, `size`) via a read-only `stats` property. |
-| Q3 | Thread-safety? | Option (a): No — single-threaded use only; no locking. |
+| Q1 | How should stats be exposed? | `stats()` method returning a dataclass or namedtuple with fields `hits`, `misses`, `evictions`, `size`. |
+| Q2 | Should the cache make a documented thread-safety guarantee? | No thread-safety guarantee — callers are responsible for external locking. |
+| Q3 | What types are valid for keys and values? | Keys must be hashable (`Hashable`); values unrestricted (`Any`); no runtime type-checking. |
+| Q4 | What should happen when `get(key)` is called for a missing key? | Accept an optional `default` parameter (like `dict.get`), returning `None` if not supplied. |
+| Q5 | Is a capacity of 0 a valid construction argument? | No — `LruCache(0)` raises `ValueError` at construction time; negative capacity likewise. |
 
 ## 14. Inferred assumptions (NOT confirmed by user)
 
-- `capacity` ≤ 0 raises `ValueError` — the rule "capacity required and positive" was stated in the request; the exact exception type is inferred. `(inferred — flag if wrong)`
-- Any hashable Python object is a valid key; any Python object is a valid value. No type constraints beyond hashability. `(inferred — flag if wrong)`
-- No `reset_stats()` method — stats are monotonically increasing for the lifetime of the instance. `(inferred — flag if wrong)`
-- `put` on an existing key updates the value and promotes the key to MRU without incrementing evictions. `(inferred — flag if wrong)`
-- `stats.size` reflects the live entry count, not a historical maximum. `(inferred — flag if wrong)`
-
-## 15. Implementer decisions (pin in spec)
-
-These decisions are taken by intake based on the answers above. `spec-architect` MUST record them in the SDD (§5 or §6) and MUST NOT reopen them without a CLARIFY citing a conflict with the constitution or a functional gap.
-
-- **Data structure:** `collections.OrderedDict` (stdlib, O(1) move-to-end on CPython 3.7+). `LruCache.__init__` creates one `OrderedDict` as the internal store.
-- **LRU tracking mechanics:** `get` calls `_store.move_to_end(key)` to mark as most-recently-used. `put` on an existing key calls `move_to_end(key)` after updating. `put` on a new key inserts at the end; if `len(_store) > capacity` after insert, pops the first item (`last=False`) as the LRU eviction.
-- **Thread-safety:** none — no `threading.Lock` or `contextlib` guards.
-- **Stats counters:** plain `int` fields on the instance; `stats` property constructs and returns a fresh `CacheStats` snapshot on each call (not a live view).
-- **`CacheStats` definition:** a `@dataclass(frozen=True)` in the same module as `LruCache` so it is importable directly from `src/tokenlab/cache.py`.
+- `from tokenlab.cache import LruCache` is the canonical import path. (inferred — flag if wrong)
+- `capacity` is immutable after construction; no resize method is provided. (inferred — flag if wrong)
+- `put` on an existing key updates the value and promotes to MRU but does NOT increment `evictions`. (inferred — flag if wrong)
+- Stats are cumulative from construction; there is no reset method. (inferred — flag if wrong)
+- No TTL or time-based expiry is supported. (inferred — flag if wrong)
+- `stats().size` reports entry count, not bytes consumed. (inferred — flag if wrong)
+- Negative capacity raises the same `ValueError` as zero capacity. (inferred — flag if wrong)

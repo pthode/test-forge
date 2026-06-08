@@ -116,9 +116,9 @@ Returns the stored value for `key` if present and increments `hits`; promotes th
 
 Inserts a new key/value pair or updates an existing key, promoting it to most-recently-used in both cases. If inserting a new key causes the cache to exceed `capacity`, the least-recently-used entry is evicted and `evictions` increments by 1. Updating an existing key does not evict and does not increment `evictions`.
 
-**`stats` property**
+**`stats() -> CacheStats`**
 
-Returns a fresh frozen dataclass snapshot `CacheStats(hits: int, misses: int, evictions: int, size: int)` on each access:
+Returns a fresh frozen dataclass snapshot `CacheStats(hits: int, misses: int, evictions: int, size: int)` on each call:
 
 - `hits` — count of successful `get` calls (non-negative, monotonic)
 - `misses` — count of unsuccessful `get` calls (non-negative, monotonic)
@@ -138,7 +138,7 @@ cache.put("b", 2)
 cache.get("a")            # 1 — hit; "a" promoted to most-recently-used
 cache.put("c", 3)         # at capacity: evicts "b" (least recently used)
 cache.get("b")            # None — miss; "b" was evicted
-cache.stats               # CacheStats(hits=1, misses=1, evictions=1, size=2)
+cache.stats()             # CacheStats(hits=1, misses=1, evictions=1, size=2)
 
 # None is a storable value, distinct from an absent key:
 cache.put("null_key", None)
@@ -150,7 +150,7 @@ cache = LruCache(capacity=2)
 cache.put("x", 10)
 cache.put("y", 20)
 cache.put("x", 100)       # update x; size stays 2, no eviction
-cache.stats               # CacheStats(hits=0, misses=0, evictions=0, size=2)
+cache.stats()             # CacheStats(hits=0, misses=0, evictions=0, size=2)
 ```
 
 #### Constraints
@@ -183,7 +183,7 @@ PYTHONPATH=src pytest        # PowerShell: $env:PYTHONPATH = "src"; pytest
 - **An entry you expected to survive was evicted** — recency is true-LRU. Only
   `get` (on a hit) and `put` mark an entry as most-recently-used. On overflow,
   the true least-recently-used entry (not accessed in the longest time) is evicted.
-  Check `cache.stats.evictions` to confirm an eviction occurred.
+  Check `cache.stats().evictions` to confirm an eviction occurred.
 
 ## Contributing
 
