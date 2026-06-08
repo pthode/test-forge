@@ -101,6 +101,51 @@ Tech debt, deferred fixes, and known cleanup items. Reviewers append entries dur
 - **Suggested fix:** `src/tokenlab/cache.py:10-28` — class docstring does not state that `capacity` bounds entry *count*, not memory bytes. Add one sentence noting that callers storing untrusted/unbounded values should bound value size themselves. Doc-hardening only; no exploit, no code change.
 - **Deadline:** 2026-09-01
 
+## B-011 — CI runs tests on Python 3.11.9 but §1 declares Python 3.12
+
+- **Created:** 2026-06-08
+- **Source:** qa-reviewer finding during feature `lru-cache` (1.17.2 run) iteration 1
+- **Type:** tech-debt
+- **Severity:** minor (singleton)
+- **Suggested fix:** `.github/workflows/ci.yml` — tests ran under Python 3.11.9 while CONSTITUTION §1 declares Python 3.12. Code uses only 3.7+ features so no functional regression, but CI should pin `python-version: "3.12"` to match the constitution. (Related to the existing `project_python_runtime_mismatch` memory.)
+- **Deadline:** 2026-09-08
+
+## B-012 — LruCache: capacity is a mutable public attribute
+
+- **Created:** 2026-06-08
+- **Source:** code-reviewer finding during feature `lru-cache` (1.17.2 run) iteration 1
+- **Type:** tech-debt
+- **Severity:** minor (singleton)
+- **Suggested fix:** `src/tokenlab/cache.py:20` — `self.capacity = capacity` is writable; `cache.capacity = 0` post-construction would silently break the `capacity > 0` invariant. Spec D8 calls it read-only-by-convention. Make it `self._capacity` with a read-only `@property`, or document the convention in the class docstring. No behavior change.
+- **Deadline:** 2026-09-08
+
+## B-013 — LruCache: keys/values typed as Any (no TypeVar generics)
+
+- **Created:** 2026-06-08
+- **Source:** code-reviewer finding during feature `lru-cache` (1.17.2 run) iteration 1
+- **Type:** tech-debt
+- **Severity:** minor (singleton)
+- **Suggested fix:** `src/tokenlab/cache.py:21` — `OrderedDict[Any, Any]` and `get`/`put` use `Any`. Spec §3 non-goals explicitly defer typed generics, so correct today. When revisited, a `TypeVar`-based `LruCache[K, V]` would align with 3.12 idiomatic typing without new deps.
+- **Deadline:** 2026-09-08
+
+## B-014 — LruCache: module docstring not verb-first imperative (house style)
+
+- **Created:** 2026-06-08
+- **Source:** code-reviewer finding during feature `lru-cache` (1.17.2 run) iteration 1
+- **Type:** cleanup
+- **Severity:** minor (singleton)
+- **Suggested fix:** `src/tokenlab/cache.py:1` — docstring present but not verb-first imperative like `duration.py:1`. Consider `"""Provide a bounded in-memory LRU cache for tokenlab (stdlib-only, single-threaded)."""`. Tonal consistency only.
+- **Deadline:** 2026-09-08
+
+## B-015 — LruCache: add why-comment on move_to_end in put update path
+
+- **Created:** 2026-06-08
+- **Source:** code-reviewer finding during feature `lru-cache` (1.17.2 run) iteration 1
+- **Type:** refactor
+- **Severity:** minor (singleton)
+- **Suggested fix:** `src/tokenlab/cache.py:35-37` — existing-key branch does `self._store[key] = value` then `move_to_end(key)`. Correct (assignment doesn't reorder), but a brief `# assignment preserves order; promote to MRU explicitly` comment prevents a future reader deleting the call as redundant (§3 "explain why").
+- **Deadline:** 2026-09-08
+
 <!-- Reviewers append entries here. Format per CONSTITUTION.md §12.2. -->
 
 ## Closed entries (audit trail — one release cycle)
