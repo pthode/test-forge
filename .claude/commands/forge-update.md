@@ -77,6 +77,30 @@ Print: `Updating forge scaffold from v<current> to v<target>.`
 
 ---
 
+## Step 2.5 — Self-update preflight (the command updates itself first)
+
+`/forge-update` is itself a forge-owned file (`.claude/commands/forge-update.md`). The invocation you are running is the **project's current copy** — so if a newer agent-forge changed the update logic itself (a new preflight gate, a new safety step), that newer logic is NOT yet in effect for this run. Driving the whole apply with stale logic means a newer safety step never runs on the very update that installs it.
+
+To close this bootstrapping gap, the command updates *itself* first.
+
+**For option A or B:**
+
+1. **Compare** the project's `.claude/commands/forge-update.md` against the source's.
+   - Option A: `git diff --quiet HEAD forge-upstream/main -- .claude/commands/forge-update.md` (non-zero exit = differs).
+   - Option B: diff the file read from the source path against the project's.
+2. **Identical** → this run is already on the latest update logic. Continue to Step 3.
+3. **Differs** → do a single-file self-update and stop:
+   - Tell the user: "`forge-update` itself is out of date. I'll update only the command file first, then you re-run `/forge-update` so the current logic drives the actual update."
+   - Ask for approval — this is a forge-owned write, so the Step 4 approval rule applies.
+   - On approval, update **only** `.claude/commands/forge-update.md` (option A: `git checkout forge-upstream/main -- .claude/commands/forge-update.md`; option B: copy that one file from the source). Do **NOT** touch any other forge-owned file, and do **NOT** change `.forge-version` — the real update has not happened yet, so the version interval must stay intact for the re-run.
+   - **Stop. Instruct the user to run `/forge-update` again.** The re-run finds an identical `forge-update.md`, passes this step, and proceeds through Steps 3–6 with the up-to-date logic (including any newer preflight / breaking-change gates).
+
+**For option C** (manual UPGRADING.md walkthrough): there is no automated source to self-update from. Instead, read the **source's** `forge-update.md` (if available) or the latest `UPGRADING.md`, and follow *those* steps — not the project's current copy — so you are not walking through stale instructions.
+
+This step is idempotent: once the command file matches the source, re-running `/forge-update` skips straight past it. (One unavoidable bootstrap remains: the jump that first *installs* a new Step 2.5 still runs on the old logic — every self-update mechanism has a version zero it cannot protect. All jumps after it are covered.)
+
+---
+
 ## Step 3 — Show the diff (plan step — do not apply yet)
 
 For option A or B:
@@ -158,6 +182,12 @@ Ask the user: "Apply these changes? (yes / no / show full diff for <file>)"
 ## Step 4 — Apply (only after explicit approval)
 
 For option A:
+
+**Before overwriting `CLAUDE.md`, capture the project's `Product:` line.** It is the one
+project-specific value living inside the otherwise-forge-owned `CLAUDE.md` (set by `/init-project`),
+and the wholesale checkout below reverts it to the template placeholder. Read the current
+`**Product:**` line from the project's `CLAUDE.md` and hold it.
+
 ```
 git checkout forge-upstream/main -- .claude/agents/
 git checkout forge-upstream/main -- .claude/commands/
@@ -166,14 +196,23 @@ git checkout forge-upstream/main -- CLAUDE.md
 ```
 Then copy `.forge-version` from forge source into the project.
 
-`CLAUDE.md` is overwritten wholesale — that is intended. Any project-specific
-router instructions belong in `CLAUDE.project.md`, which is never touched.
+**After the checkout, restore the `Product:` line.** `CLAUDE.md` now carries the template
+placeholder (`**Product:** _template — …_`). If the line you captured names a real product (not the
+placeholder), replace that placeholder line with the captured line — a single-line Edit; `CLAUDE.md`
+is at the repo root, outside the `.claude/` scaffold-lock, so the Edit tool is permitted.
+
+`CLAUDE.md` is otherwise overwritten wholesale — that is intended. Project-specific router
+instructions belong in `CLAUDE.project.md` (never touched); the `Product:` line is the **sole
+exception**, because it lives in `CLAUDE.md` by design — it must be visible at the top of the router
+playbook.
 
 For option B:
-Copy the changed forge-owned files from the source path into the project.
-Update `.forge-version` to match the source's version.
+Copy the changed forge-owned files from the source path into the project. **Preserve the
+`**Product:**` line the same way** — capture it before, restore it after the `CLAUDE.md` copy. Update
+`.forge-version` to match the source's version.
 
-For option C: print instructions; the user applies manually.
+For option C: print instructions; the user applies manually — including a reminder to keep their
+existing `**Product:**` line when they overwrite `CLAUDE.md`.
 
 ---
 
@@ -192,15 +231,21 @@ manually when ready:" and list the migration guide references.
 
 Print the **Verify** section from each UPGRADING.md entry that was applied.
 
+Always include this standing check, regardless of version: **`CLAUDE.md`'s `**Product:**` line still
+names the product, not the `_template` placeholder.** If it shows the placeholder, the Step 4 restore
+was missed — fix it with a single-line edit.
+
 ---
 
 ## Forbidden actions
 
 You MUST NOT:
 - Apply any changes to forge-owned files without explicit user approval (step 3 must come before step 4).
+- Drive the diff/apply (Steps 3–4) on a run where the project's `.claude/commands/forge-update.md` differs from the source. Self-update that one file first (Step 2.5), leave `.forge-version` unchanged, and re-run so the current update logic — not the project's stale copy — drives the actual upgrade.
 - Apply when a Step 3.5a `Requires` assertion is unmet — block and print the unsatisfied prerequisite instead.
 - Apply across a `⚠ BREAKING` boundary without the explicit, version-naming confirmation from Step 3.5b — a plain "yes" to the diff does not satisfy it.
 - Touch `CONSTITUTION.md`, `CONSTITUTION.project.md`, `CLAUDE.project.md`, `src/`, `tests/`, `docs/` project artifacts, `.claude/settings.json`, `.claude/settings.local.json`, or `.claude/memory/`.
 - Auto-delete forge-owned files that are missing from the source — flag them and let the user decide.
+- Leave `CLAUDE.md`'s `**Product:**` line as the `_template` placeholder after an update — capture the project's line before the Step 4 overwrite and restore it after.
 - Proceed if `.forge-version` in the project is HIGHER than in the source (downgrade) — stop and ask the user to confirm explicitly.
 - Invent a forge source URL — only use what the user provides or what `git remote -v` shows for `forge-upstream`.

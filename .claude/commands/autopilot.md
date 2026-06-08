@@ -66,6 +66,8 @@ Print `→ Phase 2/4: Build — running spec → code → test → doc, plus par
 
 Run the pipeline in this exact order. Each agent receives the **paths** to the ticket and all prior artifacts (not the file contents). Each agent reads the sections it needs from disk; never paste full file bodies into a dispatch prompt — that blows up context on every handoff. When dispatching `qa-reviewer` (in Phase 3 below), prepend `[mode: autopilot]` to the dispatch input so the agent knows it can REJECT on missing ticket/spec/doc artifacts.
 
+**Lean returns — the outbound counterpart.** Symmetric to the inbound rule: instruct each dispatched agent to **return only what the orchestrator needs to route** — the path to the artifact it wrote, a one-line verdict/status, and any `CLARIFY` / `REJECT` blocks verbatim. The full report, review, or reasoning stays on disk in the agent's artifact and must NOT be echoed back in the dispatch result. The orchestrator accumulates every agent's return across the whole run and re-reads the growing context on every turn, so a verbose return is paid many times over — keep what comes back to pointers + the actionable blocks, never payloads. (Standard subagent hygiene: a subagent returns a condensed summary, not its transcript.)
+
 ### 2a. Spec
 
 1. Invoke `spec-architect` with the ticket.
@@ -136,12 +138,18 @@ Field semantics:
    - `qa-reviewer` (always)
    - `code-reviewer` (always)
    - `observability-auditor` (always — constitution §8 binds every change to event-logging discipline)
-   - `security-auditor` (when the spec or implementation touches auth, input, secrets, crypto, network/file I/O, deserialization, SQL, or shell — i.e. its trigger description)
-   - `performance-analyst` (when the spec or implementation touches queries, loops, async, large data, or hot paths)
+   - `security-auditor` (when the change introduces or modifies a **trust boundary or sensitive sink**: authentication/authorization, handling of **externally-sourced** input that crosses into the system (network request, user-facing endpoint, file/CLI input), secrets or credentials, cryptography, network or file I/O, deserialization, SQL/query construction, or subprocess/shell invocation. **Do NOT** trigger on purely in-process logic that performs no I/O and crosses no trust boundary — e.g. a pure string- or data-transform library function — even though it technically "handles input".)
+   - `performance-analyst` (when the change touches a **measurable performance surface**: database queries, N+1 patterns, loops or data structures whose size is **unbounded or driven by external/large data**, blocking calls inside an async context, or code on a request hot path governed by a §6 budget. **Do NOT** trigger on a bounded loop over a small, fixed-format input with no scale dimension.)
    - `ux-consultant` (when the implementation touches anything under `/src/components`, `/pages`, `/app`, `/styles`)
    - `dependency-auditor` (when any dependency manifest — `package.json`, `pyproject.toml`, `go.mod`, `Cargo.toml`, `Gemfile`, etc. — was modified in this iteration's fixes, OR was modified at all during Phase 2 and has not yet been audited since)
 
    > **Design note — parallel, not fail-fast.** Reviewers run in parallel rather than sequentially gating on `qa-reviewer`. A "qa first, others only if qa passes" design saves ~6 invocations per iteration when qa rejects, but `qa-reviewer` cannot catch what specialist reviewers catch (security flaws, perf cliffs, a11y gaps, observability gaps), so qa-pass is not equivalent to converged. Parallel-always optimizes wall time AND prevents the bug where qa approves code that security would have rejected. Do not flip this to sequential without a corresponding redesign of the reviewer trust model.
+
+   **Conditional-inclusion discipline.** Re-evaluate the conditional set (security-auditor, performance-analyst, ux-consultant, dependency-auditor) **each iteration** against what this iteration's spec/diff actually changed — a fix can introduce a surface (new file I/O pulls in security-auditor) or remove one. Apply the criteria to **substantive** surfaces, not incidental ones: the goal is to skip a reviewer that has *nothing* to review (a pure-logic feature needs neither security-auditor nor performance-analyst), never to skip a reviewer whose surface is merely small. When a surface is genuinely ambiguous, **include** the reviewer — a wasted clean review is cheaper than a missed defect. Print one status line naming which conditional reviewers are IN and which are SKIPPED, each with a one-clause reason, so the gating decision is visible and a wrong call is catchable:
+
+   ```text
+   → Phase 3 reviewers: qa, code-reviewer, observability (always) + security-auditor [parses untrusted file input]; SKIPPED performance-analyst [no query/loop/scale surface], ux-consultant [no frontend], dependency-auditor [no manifest change].
+   ```
 
 2. **Collect all REJECT blocks** from the reviewers' outputs. Reviewers emit REJECTs only for `blocker` and `major` findings. `minor` findings live in the reviewers' reports but do NOT appear as REJECTs.
 
@@ -271,9 +279,12 @@ Release:
   - Observability: <N>/<N> spec events verified live; alerts registered with runbooks
   - Rollback plan: /docs/release-reports/<feature>-<date>.md §Rollback plan
 
-Notable inferred assumptions (review for accuracy):
-  - <pull from ticket §14, only items the spec or code actually relied on>
+Decisions taken & assumptions (review — anything to change?):
+  - <autonomous technical choices made during the build (data structure, error model, module layout, algorithm, internal API shape, …), one line each with a half-line rationale>
+  - <inferred assumptions from ticket §14 that the spec or code actually relied on>
 ```
+
+Keep this list short and concrete. It exists so the reversible technical calls the user never saw are visible for a quick review; decisions that were user-impacting, irreversible, or product/business calls were already surfaced upfront and do not belong here. See CLAUDE.md "Decision-surfacing discipline".
 
 ### 4f — Merge the PR (gated by CONSTITUTION §14)
 
